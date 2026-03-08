@@ -7,6 +7,8 @@ from plotly.subplots import make_subplots
 from datetime import timedelta
 import warnings
 import re 
+import os
+import gdown # LIBRARY KHUSUS UNTUK DOWNLOAD DARI GDRIVE
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -15,34 +17,39 @@ st.set_page_config(page_title="Multi-RAT KPI Dashboard", page_icon="📶", layou
 st.title("📶 Multi-RAT (2G/4G/5G) Daily KPI Dashboard")
 st.markdown("---")
 
-# PARQUET File Paths
-PATH_2G = r"D:\Streamlit\Data\Master_2GDaily.parquet"
-PATH_4G = r"D:\Streamlit\Data\Master_4GDaily.parquet"
-PATH_5G = r"D:\Streamlit\Data\Master_No_PLMN.parquet" 
-PATH_4G_BH = r"D:\Streamlit\Data\Master_4GBH.parquet"
-PATH_LTE = r"D:\Streamlit\Data\Master_LTE.parquet" 
-PATH_GSM = r"D:\Streamlit\Data\Master_GSM.parquet"
-
 HD_CONFIG = {
     'toImageButtonOptions': {'format': 'png', 'filename': 'KPI_Chart_Export', 'height': 700, 'width': 1200, 'scale': 2}
 }
 
+# ================= GOOGLE DRIVE IDs MAPPING =================
+# Ganti/Sesuaikan ID di bawah ini jika ada yang tertukar urutannya!
+GDRIVE_FILE_IDS = {
+    "Master_2GDaily.parquet": "1-NT-NtuVoyxvdZw-A8ypl4jhJRgOs2xy",
+    "Master_4GDaily.parquet": "1PxhJRu9ruYS8SfJ7gMbhcs-4xVOouEw3",
+    "Master_No_PLMN.parquet": "1DXBXH_dDdEIZPSRqryNk0MUGWu-cX9YC",
+    "Master_4GBH.parquet":    "1dDY3d3pJ1WxfJQVzjeFx0Z-T35bLpB61",
+    "Master_LTE.parquet":     "1hY4B6ZfMJbAG8lIgt5LAp6n4jD11hEMm",
+    "Master_GSM.parquet":     "1haxfl2PF3Q-haQVIYad5k48w8TPow8Rx"
+    
+    # File tambahan (Disiapkan untuk masa depan, sementara tidak di-load agar hemat RAM)
+    # "Master_5G_BH.parquet": "1Simg9uithTM5sRF5IqeSchhGagd1Yczf",
+    # "Master_PLMN.parquet":  "1goy4c0-2UF-Nmp1hFnfexb-6u9PlYYtD",
+    # "Master_KQI.parquet":   "1g1G5nUVmbmXwRB5m6ZDCXFgFglE9gFws"
+}
+
 # ================= HELPER FUNCTIONS =================
 def format_x_axis(fig, num_days=10):
-    # AUTO-DETECT INTERVAL MENCEGAH PENUMPUKAN LABEL
     if num_days <= 14: interval = 1
     elif num_days <= 28: interval = 2
     elif num_days <= 42: interval = 3
     elif num_days <= 70: interval = 5
     else: interval = max(1, num_days // 14)
     
-    tick_ms = 86400000 * interval # 1 Hari = 86.400.000 ms
+    tick_ms = 86400000 * interval 
     
     fig.update_xaxes(
-        tickangle=-45, 
-        dtick=tick_ms, 
-        tickformat="%Y-%m-%d",
-        tickfont=dict(color='#2c3e50', size=24), # Ukuran font 24 TETAP DIPERTAHANKAN
+        tickangle=-45, dtick=tick_ms, tickformat="%Y-%m-%d",
+        tickfont=dict(color='#2c3e50', size=24), 
         showgrid=True, gridwidth=1, gridcolor='#e5e8e8', linecolor='#bdc3c7', linewidth=1
     ) 
     fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#e5e8e8', linecolor='#bdc3c7', linewidth=1)
@@ -55,33 +62,41 @@ def get_col(df, possible_names):
         if n in df.columns: return n
     return possible_names[0]
 
-# ================= DATA LOADING (VECTORIZED OPTIMIZATION) =================
-@st.cache_data
+# ================= DATA LOADING FROM GOOGLE DRIVE =================
+@st.cache_data(ttl=timedelta(hours=12)) # Cache data selama 12 Jam agar server tidak capek download terus
 def load_data():
-    def read_and_prep(path):
+    dfs = {}
+    for filename, file_id in GDRIVE_FILE_IDS.items():
+        # Cek apakah file sudah di-download sebelumnya di Server Streamlit
+        if not os.path.exists(filename):
+            url = f'https://drive.google.com/uc?id={file_id}'
+            gdown.download(url, filename, quiet=False)
+            
         try:
-            df = pd.read_parquet(path)
+            df = pd.read_parquet(filename)
             if not df.empty and 'Date' in df.columns:
                 df['Date'] = pd.to_datetime(df['Date']).dt.date
-            return df
-        except:
-            return pd.DataFrame()
+            dfs[filename] = df
+        except Exception as e:
+            st.error(f"Error loading {filename}: {e}")
+            dfs[filename] = pd.DataFrame()
 
-    df_2g = read_and_prep(PATH_2G)
-    df_4g = read_and_prep(PATH_4G)
-    df_5g = read_and_prep(PATH_5G)
-    df_4g_bh = read_and_prep(PATH_4G_BH)
-    df_lte = read_and_prep(PATH_LTE)
-    df_gsm = read_and_prep(PATH_GSM)
-    
+    df_5g = dfs.get("Master_No_PLMN.parquet", pd.DataFrame())
     if not df_5g.empty:
         for col in ['dlulpayload', 'rrcusermax', 'cellavailability']:
             if col in df_5g.columns:
                 df_5g[col] = pd.to_numeric(df_5g[col], errors='coerce').fillna(0)
 
-    return df_2g, df_4g, df_5g, df_4g_bh, df_lte, df_gsm
+    return (
+        dfs.get("Master_2GDaily.parquet", pd.DataFrame()),
+        dfs.get("Master_4GDaily.parquet", pd.DataFrame()),
+        df_5g,
+        dfs.get("Master_4GBH.parquet", pd.DataFrame()),
+        dfs.get("Master_LTE.parquet", pd.DataFrame()),
+        dfs.get("Master_GSM.parquet", pd.DataFrame())
+    )
 
-with st.spinner("Loading Master Parquet Data & Vectorizing..."):
+with st.spinner("Downloading & Loading Data from Google Drive... Please wait..."):
     raw_2g, raw_4g, raw_5g, raw_4g_bh, raw_lte, raw_gsm = load_data()
 
 # ================= GLOBAL FILTER (MOCN ONLY) =================
@@ -109,7 +124,6 @@ def apply_filter(df, col, selected_vals):
     if not selected_vals or df.empty or col not in df.columns: return df
     return df[df[col].isin(selected_vals)]
 
-# 1. Cluster Filter
 all_clusters = set()
 for df in [base_2g, base_4g, base_5g, base_4g_bh]:
     if not df.empty and 'Cluster' in df.columns: all_clusters.update(df['Cluster'].dropna().unique())
@@ -120,7 +134,6 @@ f_4g = apply_filter(base_4g, 'Cluster', selected_clusters)
 f_5g = apply_filter(base_5g, 'Cluster', selected_clusters)
 f_4g_bh = apply_filter(base_4g_bh, 'Cluster', selected_clusters)
 
-# 2. Site / Tower ID Filter (With Smart Paste)
 all_towers = set()
 for df in [f_2g, f_4g, f_5g, f_4g_bh]:
     if not df.empty and 'TowerID' in df.columns: all_towers.update(df['TowerID'].dropna().unique())
@@ -135,7 +148,6 @@ f_4g = apply_filter(f_4g, 'TowerID', selected_towers)
 f_5g = apply_filter(f_5g, 'TowerID', selected_towers)
 f_4g_bh = apply_filter(f_4g_bh, 'TowerID', selected_towers)
 
-# 3. Tower Sector Filter
 all_tower_sectors = set()
 for df in [f_2g, f_4g, f_5g, f_4g_bh]:
     if not df.empty and 'Tower_Sector' in df.columns: all_tower_sectors.update(df['Tower_Sector'].dropna().unique())
@@ -146,7 +158,6 @@ f_4g = apply_filter(f_4g, 'Tower_Sector', selected_tower_sectors)
 f_5g = apply_filter(f_5g, 'Tower_Sector', selected_tower_sectors)
 f_4g_bh = apply_filter(f_4g_bh, 'Tower_Sector', selected_tower_sectors)
 
-# 4. Cell Filter (With Smart Paste)
 all_cells = set()
 for df in [f_2g, f_4g, f_5g, f_4g_bh]:
     if not df.empty and 'CellName' in df.columns: all_cells.update(df['CellName'].dropna().unique())
@@ -163,7 +174,6 @@ f_4g_bh = apply_filter(f_4g_bh, 'CellName', selected_cells)
 
 st.sidebar.markdown("---")
 
-# 5. Date Range & Trend Days Calculation
 all_dates = []
 for df in [f_2g, f_4g, f_5g, f_4g_bh]:
     if not df.empty and 'Date' in df.columns: all_dates.extend(df['Date'].dropna().unique())
@@ -175,13 +185,13 @@ date_range = st.sidebar.date_input("5. Global Date Range (Trend Charts)", [min_d
 
 if len(date_range) == 2:
     start_d, end_d = date_range
-    trend_days = (end_d - start_d).days + 1 # <--- Hitung Total Hari Disini
+    trend_days = (end_d - start_d).days + 1 
     chart_2g = f_2g[(f_2g['Date'] >= start_d) & (f_2g['Date'] <= end_d)] if not f_2g.empty else f_2g
     chart_4g = f_4g[(f_4g['Date'] >= start_d) & (f_4g['Date'] <= end_d)] if not f_4g.empty else f_4g
     chart_5g = f_5g[(f_5g['Date'] >= start_d) & (f_5g['Date'] <= end_d)] if not f_5g.empty else f_5g
     chart_4g_bh = f_4g_bh[(f_4g_bh['Date'] >= start_d) & (f_4g_bh['Date'] <= end_d)] if not f_4g_bh.empty else f_4g_bh
 else:
-    trend_days = 10 # Fallback
+    trend_days = 10 
     chart_2g, chart_4g, chart_5g, chart_4g_bh = f_2g, f_4g, f_5g, f_4g_bh
 
 
@@ -453,7 +463,7 @@ def plot_dual_axis(df, val_col, title_text, t_days):
         fig.add_trace(go.Scatter(x=df_sf['Date'], y=df_sf[val_col], mode='lines+markers', name='SF (Right Axis)', line=dict(color='#ff7f0e')), secondary_y=True)
         
     fig.update_layout(title_text=title_text, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-    fig = format_x_axis(fig, t_days) # <-- Inject logic tanggal pintar
+    fig = format_x_axis(fig, t_days)
     fig.update_yaxes(title_text="XL", showgrid=True, secondary_y=False)
     fig.update_yaxes(title_text="SF", showgrid=False, secondary_y=True)
     return fig
@@ -486,7 +496,6 @@ if not chart_lte.empty or not chart_gsm.empty:
         agg_op_trend['VoLTE + 2G Traf (Erl)'] = agg_op_trend[c_lte_volte] + agg_op_trend[c_gsm_traf]
     
     agg_op_trend['Operator'] = agg_op_trend['Operator'].astype(str).str.upper()
-    
     agg_op_trend = agg_op_trend[agg_op_trend['Operator'].isin(['XL', 'SF'])]
     
     if agg_op_trend.empty:
