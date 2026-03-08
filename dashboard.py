@@ -8,7 +8,7 @@ from datetime import timedelta
 import warnings
 import re 
 import os
-import gdown # LIBRARY KHUSUS UNTUK DOWNLOAD DARI GDRIVE
+import gdown 
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -22,7 +22,6 @@ HD_CONFIG = {
 }
 
 # ================= GOOGLE DRIVE IDs MAPPING =================
-# Ganti/Sesuaikan ID di bawah ini jika ada yang tertukar urutannya!
 GDRIVE_FILE_IDS = {
     "Master_2GDaily.parquet": "1-NT-NtuVoyxvdZw-A8ypl4jhJRgOs2xy",
     "Master_4GDaily.parquet": "1PxhJRu9ruYS8SfJ7gMbhcs-4xVOouEw3",
@@ -31,7 +30,6 @@ GDRIVE_FILE_IDS = {
     "Master_LTE.parquet":     "1hY4B6ZfMJbAG8lIgt5LAp6n4jD11hEMm",
     "Master_GSM.parquet":     "1haxfl2PF3Q-haQVIYad5k48w8TPow8Rx"
     
-    # File tambahan (Disiapkan untuk masa depan, sementara tidak di-load agar hemat RAM)
     # "Master_5G_BH.parquet": "1Simg9uithTM5sRF5IqeSchhGagd1Yczf",
     # "Master_PLMN.parquet":  "1goy4c0-2UF-Nmp1hFnfexb-6u9PlYYtD",
     # "Master_KQI.parquet":   "1g1G5nUVmbmXwRB5m6ZDCXFgFglE9gFws"
@@ -63,11 +61,10 @@ def get_col(df, possible_names):
     return possible_names[0]
 
 # ================= DATA LOADING FROM GOOGLE DRIVE =================
-@st.cache_data(ttl=timedelta(hours=12)) # Cache data selama 12 Jam agar server tidak capek download terus
+@st.cache_data(ttl=timedelta(hours=12)) 
 def load_data():
     dfs = {}
     for filename, file_id in GDRIVE_FILE_IDS.items():
-        # Cek apakah file sudah di-download sebelumnya di Server Streamlit
         if not os.path.exists(filename):
             url = f'https://drive.google.com/uc?id={file_id}'
             gdown.download(url, filename, quiet=False)
