@@ -32,9 +32,9 @@ GDRIVE_FILE_IDS = {
     "Master_GSM.parquet":     "1haxfl2PF3Q-haQVIYad5k48w8TPow8Rx"
 }
 
-# Daftar Kolom yang Benar-Benar Dipakai (Menghemat RAM 90%)
+# Daftar Kolom Prioritas (Diubah semua ke lowercase untuk Smart Matching)
 NEEDED_COLUMNS = [
-    'Date', 'Operator', 'Cluster', 'TowerID', 'Tower_Sector', 'CellName',
+    'date', 'operator', 'cluster', 'towerid', 'tower_sector', 'cellname',
     '2g_tch traffic_kpi', 'tchtraffic', '2g_nav_kpi(%)', '2g_nav_kpi',
     'totalpayloadgbkpi', 'connectedusermaxkpi', 'voltetrafficerlkpi', 'navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi',
     'dlulpayload', 'rrcusermax', 'cellavailability',
@@ -64,10 +64,14 @@ def format_x_axis(fig, num_days=10):
     fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font=dict(color='#2c3e50'), margin=dict(l=10, r=10, t=40, b=80))
     return fig
 
+# Fungsi Get Col Super Pintar (Kebal Huruf Besar/Kecil)
 def get_col(df, possible_names):
     if df.empty: return possible_names[0]
+    df_cols_lower = {c.lower().strip(): c for c in df.columns}
     for n in possible_names:
-        if n in df.columns: return n
+        n_lower = n.lower().strip()
+        if n_lower in df_cols_lower:
+            return df_cols_lower[n_lower]
     return possible_names[0]
 
 # ================= SUPER LIGHTWEIGHT DATA LOADING =================
@@ -83,21 +87,37 @@ def load_data():
                 st.error(f"Failed to download {filename}: {e}")
             
         try:
-            # OPTIMASI RAM: Hanya baca kolom yang terdaftar di schema file
+            # OPTIMASI RAM + SMART COLUMN MATCHING
             parquet_file = pq.ParquetFile(filename)
             existing_cols = parquet_file.schema.names
-            cols_to_load = [c for c in NEEDED_COLUMNS if c in existing_cols]
             
-            df = pd.read_parquet(filename, columns=cols_to_load)
-            if not df.empty and 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date']).dt.date
+            col_map = {c.lower().strip(): c for c in existing_cols}
+            cols_to_load = []
+            for needed in NEEDED_COLUMNS:
+                if needed in col_map:
+                    cols_to_load.append(col_map[needed])
+            
+            if cols_to_load:
+                df = pd.read_parquet(filename, columns=cols_to_load)
+            else:
+                df = pd.read_parquet(filename)
+                
+            if not df.empty:
+                date_col = next((c for c in df.columns if c.lower().strip() == 'date'), None)
+                if date_col:
+                    df['Date'] = pd.to_datetime(df[date_col]).dt.date
+                    if date_col != 'Date': 
+                        df.rename(columns={date_col: 'Date'}, inplace=True)
             dfs[filename] = df
-        except:
+        except Exception as e:
             dfs[filename] = pd.DataFrame()
 
     df_5g = dfs.get("Master_No_PLMN.parquet", pd.DataFrame())
     if not df_5g.empty:
-        for col in ['dlulpayload', 'rrcusermax', 'cellavailability']:
+        c_pay = get_col(df_5g, ['dlulpayload'])
+        c_rrc = get_col(df_5g, ['rrcusermax'])
+        c_avail = get_col(df_5g, ['cellavailability'])
+        for col in [c_pay, c_rrc, c_avail]:
             if col in df_5g.columns:
                 df_5g[col] = pd.to_numeric(df_5g[col], errors='coerce').fillna(0)
 
@@ -118,8 +138,11 @@ st.sidebar.markdown("**⚙️ GLOBAL FILTERS**")
 mocn_filter = st.sidebar.radio("Select MOCN Status", ["All", "Pre MOCN (XL & SF)", "Post MOCN (XLSMART)"])
 
 def apply_mocn_filter(df):
-    if df.empty or 'Operator' not in df.columns: return df
-    df_op_clean = df['Operator'].astype(str).str.lower().str.strip()
+    if df.empty: return df
+    op_col = get_col(df, ['operator'])
+    if op_col not in df.columns: return df
+    
+    df_op_clean = df[op_col].astype(str).str.lower().str.strip()
     if mocn_filter == "Pre MOCN (XL & SF)": return df[df_op_clean.isin(['xl', 'sf'])]
     elif mocn_filter == "Post MOCN (XLSMART)": return df[df_op_clean == 'xlsmart']
     return df
@@ -140,51 +163,55 @@ def apply_filter(df, col, selected_vals):
 
 all_clusters = set()
 for df in [base_2g, base_4g, base_5g, base_4g_bh]:
-    if not df.empty and 'Cluster' in df.columns: all_clusters.update(df['Cluster'].dropna().unique())
+    c_clust = get_col(df, ['cluster'])
+    if not df.empty and c_clust in df.columns: all_clusters.update(df[c_clust].dropna().unique())
 selected_clusters = st.sidebar.multiselect("1. Select Cluster", sorted([c for c in all_clusters if str(c) != 'nan']))
 
-f_2g = apply_filter(base_2g, 'Cluster', selected_clusters)
-f_4g = apply_filter(base_4g, 'Cluster', selected_clusters)
-f_5g = apply_filter(base_5g, 'Cluster', selected_clusters)
-f_4g_bh = apply_filter(base_4g_bh, 'Cluster', selected_clusters)
+f_2g = apply_filter(base_2g, get_col(base_2g, ['cluster']), selected_clusters)
+f_4g = apply_filter(base_4g, get_col(base_4g, ['cluster']), selected_clusters)
+f_5g = apply_filter(base_5g, get_col(base_5g, ['cluster']), selected_clusters)
+f_4g_bh = apply_filter(base_4g_bh, get_col(base_4g_bh, ['cluster']), selected_clusters)
 
 all_towers = set()
 for df in [f_2g, f_4g, f_5g, f_4g_bh]:
-    if not df.empty and 'TowerID' in df.columns: all_towers.update(df['TowerID'].dropna().unique())
+    c_tow = get_col(df, ['towerid'])
+    if not df.empty and c_tow in df.columns: all_towers.update(df[c_tow].dropna().unique())
 
 selected_towers_ms = st.sidebar.multiselect("2. Select Site / Tower ID", sorted([t for t in all_towers if str(t) != 'nan']))
 pasted_towers = st.sidebar.text_area("✏️ Or paste Site IDs (Comma / Excel paste):", height=68)
 p_towers = [s.strip() for s in re.split(r'[,\n\t]+', pasted_towers) if s.strip()] if pasted_towers else []
 selected_towers = list(set(selected_towers_ms + p_towers))
 
-f_2g = apply_filter(f_2g, 'TowerID', selected_towers)
-f_4g = apply_filter(f_4g, 'TowerID', selected_towers)
-f_5g = apply_filter(f_5g, 'TowerID', selected_towers)
-f_4g_bh = apply_filter(f_4g_bh, 'TowerID', selected_towers)
+f_2g = apply_filter(f_2g, get_col(f_2g, ['towerid']), selected_towers)
+f_4g = apply_filter(f_4g, get_col(f_4g, ['towerid']), selected_towers)
+f_5g = apply_filter(f_5g, get_col(f_5g, ['towerid']), selected_towers)
+f_4g_bh = apply_filter(f_4g_bh, get_col(f_4g_bh, ['towerid']), selected_towers)
 
 all_tower_sectors = set()
 for df in [f_2g, f_4g, f_5g, f_4g_bh]:
-    if not df.empty and 'Tower_Sector' in df.columns: all_tower_sectors.update(df['Tower_Sector'].dropna().unique())
+    c_ts = get_col(df, ['tower_sector'])
+    if not df.empty and c_ts in df.columns: all_tower_sectors.update(df[c_ts].dropna().unique())
 selected_tower_sectors = st.sidebar.multiselect("3. Select Tower Sector", sorted([s for s in all_tower_sectors if str(s) != 'nan']))
 
-f_2g = apply_filter(f_2g, 'Tower_Sector', selected_tower_sectors)
-f_4g = apply_filter(f_4g, 'Tower_Sector', selected_tower_sectors)
-f_5g = apply_filter(f_5g, 'Tower_Sector', selected_tower_sectors)
-f_4g_bh = apply_filter(f_4g_bh, 'Tower_Sector', selected_tower_sectors)
+f_2g = apply_filter(f_2g, get_col(f_2g, ['tower_sector']), selected_tower_sectors)
+f_4g = apply_filter(f_4g, get_col(f_4g, ['tower_sector']), selected_tower_sectors)
+f_5g = apply_filter(f_5g, get_col(f_5g, ['tower_sector']), selected_tower_sectors)
+f_4g_bh = apply_filter(f_4g_bh, get_col(f_4g_bh, ['tower_sector']), selected_tower_sectors)
 
 all_cells = set()
 for df in [f_2g, f_4g, f_5g, f_4g_bh]:
-    if not df.empty and 'CellName' in df.columns: all_cells.update(df['CellName'].dropna().unique())
+    c_cell = get_col(df, ['cellname'])
+    if not df.empty and c_cell in df.columns: all_cells.update(df[c_cell].dropna().unique())
 
 selected_cells_ms = st.sidebar.multiselect("4. Select Cell (MOEntity)", sorted([c for c in all_cells if str(c) != 'nan']))
 pasted_cells = st.sidebar.text_area("✏️ Or paste Cell Names (Comma / Excel paste):", height=68)
 p_cells = [s.strip() for s in re.split(r'[,\n\t]+', pasted_cells) if s.strip()] if pasted_cells else []
 selected_cells = list(set(selected_cells_ms + p_cells))
 
-f_2g = apply_filter(f_2g, 'CellName', selected_cells)
-f_4g = apply_filter(f_4g, 'CellName', selected_cells)
-f_5g = apply_filter(f_5g, 'CellName', selected_cells)
-f_4g_bh = apply_filter(f_4g_bh, 'CellName', selected_cells)
+f_2g = apply_filter(f_2g, get_col(f_2g, ['cellname']), selected_cells)
+f_4g = apply_filter(f_4g, get_col(f_4g, ['cellname']), selected_cells)
+f_5g = apply_filter(f_5g, get_col(f_5g, ['cellname']), selected_cells)
+f_4g_bh = apply_filter(f_4g_bh, get_col(f_4g_bh, ['cellname']), selected_cells)
 
 st.sidebar.markdown("---")
 
@@ -239,27 +266,30 @@ st.header("📊 Pre vs Post Comparison - MOCN RAT Level")
 col_f1, col_f2 = st.columns(2)
 with col_f1:
     all_clusters_comp = set()
-    for df in [base_2g, base_4g, base_5g]: 
-        if not df.empty and 'Cluster' in df.columns: all_clusters_comp.update(df['Cluster'].dropna().unique())
+    # PENGAMANAN: Gunakan RAW data agar Pre MOCN tidak jadi 0 saat sidebar di-klik Post MOCN
+    for df in [raw_2g, raw_4g, raw_5g]: 
+        c_clust = get_col(df, ['cluster'])
+        if not df.empty and c_clust in df.columns: all_clusters_comp.update(df[c_clust].dropna().unique())
     selected_clusters_comp = st.multiselect("Select Cluster (MOCN Comparison)", sorted([c for c in all_clusters_comp if str(c) != 'nan']), key='cl_mocn')
 
-comp_2g_c = apply_filter(base_2g, 'Cluster', selected_clusters_comp) if selected_clusters_comp else base_2g
-comp_4g_c = apply_filter(base_4g, 'Cluster', selected_clusters_comp) if selected_clusters_comp else base_4g
-comp_5g_c = apply_filter(base_5g, 'Cluster', selected_clusters_comp) if selected_clusters_comp else base_5g
+comp_2g_c = apply_filter(raw_2g, get_col(raw_2g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_2g
+comp_4g_c = apply_filter(raw_4g, get_col(raw_4g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_4g
+comp_5g_c = apply_filter(raw_5g, get_col(raw_5g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_5g
 
 with col_f2:
     all_towers_comp = set()
     for df in [comp_2g_c, comp_4g_c, comp_5g_c]:
-        if not df.empty and 'TowerID' in df.columns: all_towers_comp.update(df['TowerID'].dropna().unique())
+        c_tow = get_col(df, ['towerid'])
+        if not df.empty and c_tow in df.columns: all_towers_comp.update(df[c_tow].dropna().unique())
     
     selected_towers_comp_ms = st.multiselect("Select Site (MOCN Comparison)", sorted([t for t in all_towers_comp if str(t) != 'nan']), key='site_mocn_ms')
     pasted_towers_comp = st.text_area("✏️ Or paste Site IDs here (Comma / Excel paste):", key='site_mocn_ta', height=68)
     p_towers_comp = [s.strip() for s in re.split(r'[,\n\t]+', pasted_towers_comp) if s.strip()] if pasted_towers_comp else []
     selected_towers_comp = list(set(selected_towers_comp_ms + p_towers_comp))
 
-comp_2g = apply_filter(comp_2g_c, 'TowerID', selected_towers_comp) if selected_towers_comp else comp_2g_c
-comp_4g = apply_filter(comp_4g_c, 'TowerID', selected_towers_comp) if selected_towers_comp else comp_4g_c
-comp_5g = apply_filter(comp_5g_c, 'TowerID', selected_towers_comp) if selected_towers_comp else comp_5g_c
+comp_2g = apply_filter(comp_2g_c, get_col(comp_2g_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_2g_c
+comp_4g = apply_filter(comp_4g_c, get_col(comp_4g_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_4g_c
+comp_5g = apply_filter(comp_5g_c, get_col(comp_5g_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_5g_c
 
 col_pre, col_post = st.columns(2)
 default_pre_end = min_date + timedelta(days=4) if max_date > min_date + timedelta(days=4) else max_date
@@ -345,7 +375,6 @@ if len(pre_dates) == 2 and len(post_dates) == 2:
         ]
     }
     df_comp = pd.DataFrame(comp_data)
-    # OPTIMASI: Ganti use_container_width dengan width='stretch'
     st.dataframe(df_comp.style.format({f"Pre ({pre_days} Days)": "{:,.2f}", f"Post ({post_days} Days)": "{:,.2f}", "Delta (%)": "{:,.2f} %"}).map(color_delta, subset=['Delta (%)']), width='stretch')
 else:
     st.warning("Please select a complete date range for both Pre and Post calendars above.")
@@ -359,24 +388,26 @@ col_l1, col_l2 = st.columns(2)
 with col_l1:
     all_clusters_op = set()
     for df in [raw_lte, raw_gsm]:
-        if not df.empty and 'Cluster' in df.columns: all_clusters_op.update(df['Cluster'].dropna().unique())
+        c_clust = get_col(df, ['cluster'])
+        if not df.empty and c_clust in df.columns: all_clusters_op.update(df[c_clust].dropna().unique())
     selected_clusters_op = st.multiselect("Select Cluster (Operator Level)", sorted([c for c in all_clusters_op if str(c) != 'nan']), key='cl_op')
 
-comp_lte_c = apply_filter(raw_lte, 'Cluster', selected_clusters_op) if selected_clusters_op else raw_lte
-comp_gsm_c = apply_filter(raw_gsm, 'Cluster', selected_clusters_op) if selected_clusters_op else raw_gsm
+comp_lte_c = apply_filter(raw_lte, get_col(raw_lte, ['cluster']), selected_clusters_op) if selected_clusters_op else raw_lte
+comp_gsm_c = apply_filter(raw_gsm, get_col(raw_gsm, ['cluster']), selected_clusters_op) if selected_clusters_op else raw_gsm
 
 with col_l2:
     all_towers_op = set()
     for df in [comp_lte_c, comp_gsm_c]:
-        if not df.empty and 'TowerID' in df.columns: all_towers_op.update(df['TowerID'].dropna().unique())
+        c_tow = get_col(df, ['towerid'])
+        if not df.empty and c_tow in df.columns: all_towers_op.update(df[c_tow].dropna().unique())
     
     selected_towers_op_ms = st.multiselect("Select Site (Operator Level)", sorted([t for t in all_towers_op if str(t) != 'nan']), key='site_op_ms')
     pasted_towers_op = st.text_area("✏️ Or paste Site IDs here (Comma / Excel paste):", key='site_op_ta', height=68)
     p_towers_op = [s.strip() for s in re.split(r'[,\n\t]+', pasted_towers_op) if s.strip()] if pasted_towers_op else []
     selected_towers_op = list(set(selected_towers_op_ms + p_towers_op))
 
-comp_lte = apply_filter(comp_lte_c, 'TowerID', selected_towers_op) if selected_towers_op else comp_lte_c
-comp_gsm = apply_filter(comp_gsm_c, 'TowerID', selected_towers_op) if selected_towers_op else comp_gsm_c
+comp_lte = apply_filter(comp_lte_c, get_col(comp_lte_c, ['towerid']), selected_towers_op) if selected_towers_op else comp_lte_c
+comp_gsm = apply_filter(comp_gsm_c, get_col(comp_gsm_c, ['towerid']), selected_towers_op) if selected_towers_op else comp_gsm_c
 
 col_pre_op, col_post_op = st.columns(2)
 with col_pre_op: pre_dates_op = st.date_input("📅 Select PRE Date Range (Op Level)", [min_date, default_pre_end], min_value=min_date, max_value=max_date, key='pre_op')
@@ -389,8 +420,10 @@ if len(pre_dates_op) == 2 and len(post_dates_op) == 2:
     post_days_o = (post_end_o - post_start_o).days + 1
 
     def get_op_sum(df, col_names, op_name):
-        if df.empty or 'Operator' not in df.columns: return 0
-        df_op = df[df['Operator'].astype(str).str.lower().str.strip() == op_name]
+        if df.empty: return 0
+        op_col = get_col(df, ['operator'])
+        if op_col not in df.columns: return 0
+        df_op = df[df[op_col].astype(str).str.lower().str.strip() == op_name]
         return get_sum(df_op, col_names)
 
     c_lte_pay  = ['totalpayloadgbkpi']
@@ -471,8 +504,10 @@ else:
 
 def plot_dual_axis(df, val_col, title_text, t_days):
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    df_xl = df[df['Operator'] == 'XL']
-    df_sf = df[df['Operator'] == 'SF']
+    
+    op_col = get_col(df, ['operator'])
+    df_xl = df[df[op_col].astype(str).str.upper() == 'XL'] if op_col in df.columns else pd.DataFrame()
+    df_sf = df[df[op_col].astype(str).str.upper() == 'SF'] if op_col in df.columns else pd.DataFrame()
     
     if not df_xl.empty:
         fig.add_trace(go.Scatter(x=df_xl['Date'], y=df_xl[val_col], mode='lines+markers', name='XL (Left Axis)', line=dict(color='#1f77b4')), secondary_y=False)
@@ -493,10 +528,14 @@ if not chart_lte.empty or not chart_gsm.empty:
     c_lte_dlden = get_col(chart_lte, ['celldluserthpden'])
     c_gsm_traf = get_col(chart_gsm, ['tchtraffic', '2g_tch traffic_kpi'])
     
-    if not chart_lte.empty:
+    c_lte_op = get_col(chart_lte, ['operator'])
+    c_gsm_op = get_col(chart_gsm, ['operator'])
+    
+    if not chart_lte.empty and c_lte_op in chart_lte.columns:
         valid_lte_agg = {k: 'sum' for k in [c_lte_pay, c_lte_volte, c_lte_rrc, c_lte_dlnum, c_lte_dlden] if k in chart_lte.columns}
         if valid_lte_agg:
-            agg_lte = chart_lte.groupby(['Date', 'Operator']).agg(valid_lte_agg).reset_index()
+            agg_lte = chart_lte.groupby(['Date', c_lte_op]).agg(valid_lte_agg).reset_index()
+            agg_lte.rename(columns={c_lte_op: 'Operator'}, inplace=True)
         else:
             agg_lte = pd.DataFrame(columns=['Date', 'Operator'])
             
@@ -507,10 +546,11 @@ if not chart_lte.empty or not chart_gsm.empty:
     else:
         agg_lte = pd.DataFrame(columns=['Date', 'Operator', c_lte_pay, c_lte_volte, c_lte_rrc, 'DL Thp (Mbps)'])
 
-    if not chart_gsm.empty:
+    if not chart_gsm.empty and c_gsm_op in chart_gsm.columns:
         valid_gsm_agg = {c_gsm_traf: 'sum'} if c_gsm_traf in chart_gsm.columns else {}
         if valid_gsm_agg:
-            agg_gsm = chart_gsm.groupby(['Date', 'Operator']).agg(valid_gsm_agg).reset_index()
+            agg_gsm = chart_gsm.groupby(['Date', c_gsm_op]).agg(valid_gsm_agg).reset_index()
+            agg_gsm.rename(columns={c_gsm_op: 'Operator'}, inplace=True)
         else:
             agg_gsm = pd.DataFrame(columns=['Date', 'Operator'])
     else:
@@ -696,12 +736,14 @@ if not chart_4g_bh.empty and len(date_range) == 2:
 
     # ================= PART 4: BUSY HOUR TOWER SECTOR =================
     st.header("🏢 Busy Hour - Tower Sector Level Analysis")
-    unique_sectors = chart_4g_bh['Tower_Sector'].nunique()
+    c_ts_bh = get_col(chart_4g_bh, ['tower_sector'])
+    unique_sectors = chart_4g_bh[c_ts_bh].nunique() if c_ts_bh in chart_4g_bh.columns else 0
     
     if unique_sectors > 30: st.info(f"There are {unique_sectors} Tower_Sectors selected. Please filter specifically (Maximum 30 Sectors).")
     elif unique_sectors == 0: st.warning("No matching Tower_Sector.")
     elif valid_bh_agg:
-        agg_bh_ts = chart_4g_bh.groupby(['Date', 'Tower_Sector']).agg(valid_bh_agg).reset_index()
+        agg_bh_ts = chart_4g_bh.groupby(['Date', c_ts_bh]).agg(valid_bh_agg).reset_index()
+        agg_bh_ts.rename(columns={c_ts_bh: 'Tower_Sector'}, inplace=True)
 
         for col in [b_dl_num, b_dl_den, b_ul_num, b_ul_den, b_ta_num, b_ta_den, b_cqi_num, b_cqi_den]:
             if col not in agg_bh_ts.columns: agg_bh_ts[col] = 0
@@ -752,12 +794,14 @@ if not chart_4g_bh.empty and len(date_range) == 2:
 
     # ================= PART 5: BUSY HOUR CELL LEVEL CHARTS =================
     st.header("🔬 Busy Hour - Cell Level Analysis")
-    unique_cells = chart_4g_bh['CellName'].nunique()
+    c_cell_bh = get_col(chart_4g_bh, ['cellname'])
+    unique_cells = chart_4g_bh[c_cell_bh].nunique() if c_cell_bh in chart_4g_bh.columns else 0
     
     if unique_cells > 30: st.info(f"There are {unique_cells} cells selected. Please filter specifically (Maximum 30 Cells).")
     elif unique_cells == 0: st.warning("No matching cell.")
     elif valid_bh_agg:
-        agg_bh_cell = chart_4g_bh.groupby(['Date', 'Tower_Sector', 'CellName']).agg(valid_bh_agg).reset_index()
+        agg_bh_cell = chart_4g_bh.groupby(['Date', c_ts_bh, c_cell_bh]).agg(valid_bh_agg).reset_index()
+        agg_bh_cell.rename(columns={c_ts_bh: 'Tower_Sector', c_cell_bh: 'CellName'}, inplace=True)
 
         for col in [b_dl_num, b_dl_den, b_ul_num, b_ul_den, b_ta_num, b_ta_den, b_cqi_num, b_cqi_den]:
             if col not in agg_bh_cell.columns: agg_bh_cell[col] = 0
