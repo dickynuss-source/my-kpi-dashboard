@@ -10,7 +10,7 @@ import re
 import os
 import gdown 
 import pyarrow.parquet as pq
-import gc # MESIN PEMBERSIH RAM OTOMATIS
+import gc 
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -70,21 +70,24 @@ def get_col(df, possible_names):
         if n_lower in df_cols_lower: return df_cols_lower[n_lower]
     return possible_names[0]
 
-# FUNGSI DIET MEMORI (RAM Saver)
+# FUNGSI DIET MEMORI (Diperbarui)
 def optimize_memory(df):
     if df.empty: return df
     for col in df.columns:
+        # PENGECUALIAN: Jangan sentuh kolom Date agar tidak error saat filter kalender
+        if col == 'Date': 
+            continue
+            
         col_type = df[col].dtype
         if col_type == 'object':
-            df[col] = df[col].astype('category') # Susutkan RAM Teks hingga 90%
+            df[col] = df[col].astype('category') 
         elif col_type == 'float64':
-            df[col] = df[col].astype('float32')  # Susutkan RAM Angka hingga 50%
+            df[col] = df[col].astype('float32')  
         elif col_type == 'int64':
             df[col] = df[col].astype('int32')
     return df
 
 # ================= SUPER LIGHTWEIGHT DATA LOADING =================
-# max_entries=1 mencegah Streamlit menggandakan memori di latar belakang
 @st.cache_data(ttl=timedelta(hours=12), max_entries=1) 
 def load_data():
     dfs = {}
@@ -122,14 +125,13 @@ def load_data():
                     df['Date'] = df['Date_Temp']
                     df = df.drop(columns=['Date_Temp'])
                 
-                # Eksekusi Diet Memori
+                # Eksekusi Diet Memori dengan pengecualian Date
                 df = optimize_memory(df)
                 
             dfs[filename] = df
         except Exception:
             dfs[filename] = pd.DataFrame()
             
-        # Panggil pembersih RAM setelah setiap file di-load
         gc.collect()
 
     df_5g = dfs.get("Master_No_PLMN.parquet", pd.DataFrame())
@@ -153,7 +155,6 @@ def load_data():
 with st.spinner("Downloading & Extracting Data Safely (Applying Extreme RAM Optimization)..."):
     raw_2g, raw_4g, raw_5g, raw_4g_bh, raw_lte, raw_gsm = load_data()
 
-# Bersihkan sisa-sisa proses download
 gc.collect()
 
 # ================= GLOBAL FILTER (MOCN ONLY) =================
@@ -576,7 +577,8 @@ if not chart_lte.empty or not chart_gsm.empty:
     if not chart_lte.empty and c_lte_op in chart_lte.columns:
         valid_lte_agg = {k: 'sum' for k in [c_lte_pay, c_lte_volte, c_lte_rrc, c_lte_dlnum, c_lte_dlden] if k in chart_lte.columns}
         if valid_lte_agg:
-            agg_lte = chart_lte.groupby(['Date', c_lte_op], observed=True).agg(valid_lte_agg).reset_index()
+            # Matikan observed=True untuk pandas versi lama
+            agg_lte = chart_lte.groupby(['Date', c_lte_op]).agg(valid_lte_agg).reset_index()
             agg_lte.rename(columns={c_lte_op: 'Operator'}, inplace=True)
         else:
             agg_lte = pd.DataFrame(columns=['Date', 'Operator'])
@@ -591,7 +593,7 @@ if not chart_lte.empty or not chart_gsm.empty:
     if not chart_gsm.empty and c_gsm_op in chart_gsm.columns:
         valid_gsm_agg = {c_gsm_traf: 'sum'} if c_gsm_traf in chart_gsm.columns else {}
         if valid_gsm_agg:
-            agg_gsm = chart_gsm.groupby(['Date', c_gsm_op], observed=True).agg(valid_gsm_agg).reset_index()
+            agg_gsm = chart_gsm.groupby(['Date', c_gsm_op]).agg(valid_gsm_agg).reset_index()
             agg_gsm.rename(columns={c_gsm_op: 'Operator'}, inplace=True)
         else:
             agg_gsm = pd.DataFrame(columns=['Date', 'Operator'])
@@ -649,19 +651,19 @@ col_5g_avail= get_col(chart_5g, ['cellavailability'])
 dict_2g = {}
 if col_2g_traf in chart_2g.columns: dict_2g[col_2g_traf] = 'sum'
 if col_2g_avail in chart_2g.columns: dict_2g[col_2g_avail] = 'mean'
-agg_2g = chart_2g.groupby('Date', observed=True).agg(dict_2g).reset_index() if not chart_2g.empty and dict_2g else pd.DataFrame(columns=['Date'])
+agg_2g = chart_2g.groupby('Date').agg(dict_2g).reset_index() if not chart_2g.empty and dict_2g else pd.DataFrame(columns=['Date'])
 
 dict_4g = {}
 for c in [col_4g_pay, col_4g_rrc, col_4g_volte]:
     if c in chart_4g.columns: dict_4g[c] = 'sum'
 if col_4g_avail in chart_4g.columns: dict_4g[col_4g_avail] = 'mean'
-agg_4g = chart_4g.groupby('Date', observed=True).agg(dict_4g).reset_index() if not chart_4g.empty and dict_4g else pd.DataFrame(columns=['Date'])
+agg_4g = chart_4g.groupby('Date').agg(dict_4g).reset_index() if not chart_4g.empty and dict_4g else pd.DataFrame(columns=['Date'])
 
 dict_5g = {}
 for c in [col_5g_pay, col_5g_rrc]:
     if c in chart_5g.columns: dict_5g[c] = 'sum'
 if col_5g_avail in chart_5g.columns: dict_5g[col_5g_avail] = 'mean'
-agg_5g = chart_5g.groupby('Date', observed=True).agg(dict_5g).reset_index() if not chart_5g.empty and dict_5g else pd.DataFrame(columns=['Date'])
+agg_5g = chart_5g.groupby('Date').agg(dict_5g).reset_index() if not chart_5g.empty and dict_5g else pd.DataFrame(columns=['Date'])
 
 df_trend = pd.merge(agg_4g, agg_5g, on='Date', how='outer')
 df_trend = pd.merge(df_trend, agg_2g, on='Date', how='outer').fillna(0)
@@ -735,7 +737,7 @@ if not chart_4g_bh.empty and len(date_range) == 2:
     valid_bh_agg = {k: v for k, v in bh_agg_dict.items() if k in chart_4g_bh.columns}
 
     if valid_bh_agg:
-        agg_bh = chart_4g_bh.groupby('Date', observed=True).agg(valid_bh_agg).reset_index()
+        agg_bh = chart_4g_bh.groupby('Date').agg(valid_bh_agg).reset_index()
         for col in [b_dl_num, b_dl_den, b_ul_num, b_ul_den, b_ta_num, b_ta_den, b_cqi_num, b_cqi_den]:
             if col not in agg_bh.columns: agg_bh[col] = 0
 
@@ -784,7 +786,7 @@ if not chart_4g_bh.empty and len(date_range) == 2:
     if unique_sectors > 30: st.info(f"There are {unique_sectors} Tower_Sectors selected. Please filter specifically (Maximum 30 Sectors).")
     elif unique_sectors == 0: st.warning("No matching Tower_Sector.")
     elif valid_bh_agg:
-        agg_bh_ts = chart_4g_bh.groupby(['Date', c_ts_bh], observed=True).agg(valid_bh_agg).reset_index()
+        agg_bh_ts = chart_4g_bh.groupby(['Date', c_ts_bh]).agg(valid_bh_agg).reset_index()
         agg_bh_ts.rename(columns={c_ts_bh: 'Tower_Sector'}, inplace=True)
 
         for col in [b_dl_num, b_dl_den, b_ul_num, b_ul_den, b_ta_num, b_ta_den, b_cqi_num, b_cqi_den]:
@@ -842,7 +844,7 @@ if not chart_4g_bh.empty and len(date_range) == 2:
     if unique_cells > 30: st.info(f"There are {unique_cells} cells selected. Please filter specifically (Maximum 30 Cells).")
     elif unique_cells == 0: st.warning("No matching cell.")
     elif valid_bh_agg:
-        agg_bh_cell = chart_4g_bh.groupby(['Date', c_ts_bh, c_cell_bh], observed=True).agg(valid_bh_agg).reset_index()
+        agg_bh_cell = chart_4g_bh.groupby(['Date', c_ts_bh, c_cell_bh]).agg(valid_bh_agg).reset_index()
         agg_bh_cell.rename(columns={c_ts_bh: 'Tower_Sector', c_cell_bh: 'CellName'}, inplace=True)
 
         for col in [b_dl_num, b_dl_den, b_ul_num, b_ul_den, b_ta_num, b_ta_den, b_cqi_num, b_cqi_den]:
