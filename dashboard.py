@@ -24,12 +24,12 @@ HD_CONFIG = {
 
 # ================= GOOGLE DRIVE IDs MAPPING =================
 GDRIVE_FILE_IDS = {
-    "Master_2GDaily.parquet": "1-NT-NtuVoyxvdZw-A8ypl4jhJRgOs2xy",
-    "Master_4GDaily.parquet": "1PxhJRu9ruYS8SfJ7gMbhcs-4xVOouEw3",
+    "Master_2GDaily.parquet": "1haxfl2PF3Q-haQVIYad5k48w8TPow8Rx",
+    "Master_4GDaily.parquet": "1hY4B6ZfMJbAG8lIgt5LAp6n4jD11hEMm",
     "Master_No_PLMN.parquet": "1Simg9uithTM5sRF5IqeSchhGagd1Yczf", # <-- LINK 5G BARU SUDAH MASUK
     "Master_4GBH.parquet":    "1dDY3d3pJ1WxfJQVzjeFx0Z-T35bLpB61",
-    "Master_LTE.parquet":     "1hY4B6ZfMJbAG8lIgt5LAp6n4jD11hEMm",
-    "Master_GSM.parquet":     "1haxfl2PF3Q-haQVIYad5k48w8TPow8Rx"
+    "Master_LTE.parquet":     "1-NT-NtuVoyxvdZw-A8ypl4jhJRgOs2xy",
+    "Master_GSM.parquet":     "1DXBXH_dDdEIZPSRqryNk0MUGWu-cX9YC"
 }
 
 # PENGHEMAT RAM (Hanya baca kolom ini, hindari OOM Crash)
@@ -620,3 +620,4 @@ elif menu == "⏳ Trend Busy Hour":
 
                 fig_bh_cqi = px.line(agg_bh, x='Date', y='BH Average CQI', title='6. BH Average CQI', markers=True, color_discrete_sequence=['#e377c2'])
                 st.plotly_chart(format_x_axis(fig_bh_cqi, trend_days), use_container_width=True, config=HD_CONFIG)
+
