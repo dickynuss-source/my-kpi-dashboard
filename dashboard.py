@@ -27,25 +27,11 @@ HD_CONFIG = {
 GDRIVE_FILE_IDS = {
     "Master_2GDaily.parquet": "1-NT-NtuVoyxvdZw-A8ypl4jhJRgOs2xy",
     "Master_4GDaily.parquet": "1PxhJRu9ruYS8SfJ7gMbhcs-4xVOouEw3",
-    "Master_No_PLMN.parquet": "1Simg9uithTM5sRF5IqeSchhGagd1Yczf",
+    "Master_No_PLMN.parquet": "1Simg9uithTM5sRF5IqeSchhGagd1Yczf", # Link 5G yang Benar
     "Master_4GBH.parquet":    "1dDY3d3pJ1WxfJQVzjeFx0Z-T35bLpB61",
     "Master_LTE.parquet":     "1hY4B6ZfMJbAG8lIgt5LAp6n4jD11hEMm",
     "Master_GSM.parquet":     "1haxfl2PF3Q-haQVIYad5k48w8TPow8Rx"
 }
-
-NEEDED_COLUMNS = [
-    'date', 'begintime', 'operator', 'opr', 'cluster', 'project_cluster', 
-    'towerid', 'siteid', 'tower_sector', 'cellname', 'moentity', 
-    '2g_tch traffic_kpi', 'tchtraffic', '2g_nav_kpi(%)', '2g_nav_kpi',
-    'totalpayloadgbkpi', '4g_total payload gb_kpi', 'connectedusermaxkpi', 
-    'voltetrafficerlkpi', 'navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi',
-    'cellavailability', '4g_nav_kpi(%)', '4g_nav_kpi', 'dlulpayload', 'rrcusermax',
-    '4g_cell_downlink user throughput_num', 'celldluserthpnum',
-    '4g_cell_downlink user throughput_den', 'celldluserthpden',
-    '4g_cell_uplink user throughput_num', '4g_cell_uplink user throughput_den',
-    'dl prb', 'dlprbutil', '4g_average ta num_mpi', '4g_average ta den_mpi',
-    '4g_cell_average cqi_num', '4g_cell_average cqi_den'
-]
 
 # ================= HELPER FUNCTIONS =================
 def format_x_axis(fig, num_days=10):
@@ -70,23 +56,6 @@ def get_col(df, possible_names):
         if n_lower in df_cols_lower: return df_cols_lower[n_lower]
     return possible_names[0]
 
-# FUNGSI DIET MEMORI (Diperbarui)
-def optimize_memory(df):
-    if df.empty: return df
-    for col in df.columns:
-        # PENGECUALIAN: Jangan sentuh kolom Date agar tidak error saat filter kalender
-        if col == 'Date': 
-            continue
-            
-        col_type = df[col].dtype
-        if col_type == 'object':
-            df[col] = df[col].astype('category') 
-        elif col_type == 'float64':
-            df[col] = df[col].astype('float32')  
-        elif col_type == 'int64':
-            df[col] = df[col].astype('int32')
-    return df
-
 # ================= SUPER LIGHTWEIGHT DATA LOADING =================
 @st.cache_data(ttl=timedelta(hours=12), max_entries=1) 
 def load_data():
@@ -109,6 +78,7 @@ def load_data():
             parquet_file = pq.ParquetFile(filename)
             existing_cols = parquet_file.schema.names
             
+            # Diet Parquet: Hanya ambil kolom yang relevan dengan keyword
             cols_to_load = [c for c in existing_cols if any(k in c.lower() for k in keep_keywords)]
             
             if cols_to_load:
@@ -124,9 +94,6 @@ def load_data():
                         df = df.drop(columns=[date_col])
                     df['Date'] = df['Date_Temp']
                     df = df.drop(columns=['Date_Temp'])
-                
-                # Eksekusi Diet Memori dengan pengecualian Date
-                df = optimize_memory(df)
                 
             dfs[filename] = df
         except Exception:
@@ -152,7 +119,7 @@ def load_data():
         dfs.get("Master_GSM.parquet", pd.DataFrame())
     )
 
-with st.spinner("Downloading & Extracting Data Safely (Applying Extreme RAM Optimization)..."):
+with st.spinner("Downloading & Extracting Data Safely (Optimized RAM)..."):
     raw_2g, raw_4g, raw_5g, raw_4g_bh, raw_lte, raw_gsm = load_data()
 
 gc.collect()
@@ -304,18 +271,18 @@ st.header("📊 Pre vs Post Comparison - MOCN RAT Level")
 col_f1, col_f2 = st.columns(2)
 with col_f1:
     all_clusters_comp = set()
-    for df in [raw_lte, raw_gsm, raw_5g]: 
+    for df in [raw_2g, raw_4g, raw_5g]: 
         c_clust = get_col(df, ['cluster'])
         if not df.empty and c_clust in df.columns: all_clusters_comp.update(df[c_clust].dropna().unique())
     selected_clusters_comp = st.multiselect("Select Cluster (MOCN Comparison)", sorted([c for c in all_clusters_comp if str(c) != 'nan']), key='cl_mocn')
 
-comp_lte_mocn_c = apply_filter(raw_lte, get_col(raw_lte, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_lte
-comp_gsm_mocn_c = apply_filter(raw_gsm, get_col(raw_gsm, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_gsm
-comp_5g_mocn_c = apply_filter(raw_5g, get_col(raw_5g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_5g
+comp_2g_c = apply_filter(raw_2g, get_col(raw_2g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_2g
+comp_4g_c = apply_filter(raw_4g, get_col(raw_4g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_4g
+comp_5g_c = apply_filter(raw_5g, get_col(raw_5g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_5g
 
 with col_f2:
     all_towers_comp = set()
-    for df in [comp_lte_mocn_c, comp_gsm_mocn_c, comp_5g_mocn_c]:
+    for df in [comp_2g_c, comp_4g_c, comp_5g_c]:
         c_tow = get_col(df, ['towerid'])
         if not df.empty and c_tow in df.columns: all_towers_comp.update(df[c_tow].dropna().unique())
     
@@ -324,9 +291,9 @@ with col_f2:
     p_towers_comp = [s.strip() for s in re.split(r'[,\n\t]+', pasted_towers_comp) if s.strip()] if pasted_towers_comp else []
     selected_towers_comp = list(set(selected_towers_comp_ms + p_towers_comp))
 
-comp_lte_mocn = apply_filter(comp_lte_mocn_c, get_col(comp_lte_mocn_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_lte_mocn_c
-comp_gsm_mocn = apply_filter(comp_gsm_mocn_c, get_col(comp_gsm_mocn_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_gsm_mocn_c
-comp_5g_mocn = apply_filter(comp_5g_mocn_c, get_col(comp_5g_mocn_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_5g_mocn_c
+comp_2g = apply_filter(comp_2g_c, get_col(comp_2g_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_2g_c
+comp_4g = apply_filter(comp_4g_c, get_col(comp_4g_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_4g_c
+comp_5g = apply_filter(comp_5g_c, get_col(comp_5g_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_5g_c
 
 col_pre, col_post = st.columns(2)
 default_pre_end = min_date + timedelta(days=4) if max_date > min_date + timedelta(days=4) else max_date
@@ -341,56 +308,79 @@ if len(pre_dates) == 2 and len(post_dates) == 2:
     pre_days = (pre_end - pre_start).days + 1
     post_days = (post_end - post_start).days + 1
 
-    pre_lte_df = comp_lte_mocn[(comp_lte_mocn['Date'] >= pre_start) & (comp_lte_mocn['Date'] <= pre_end)] if not comp_lte_mocn.empty else comp_lte_mocn
-    post_lte_df = comp_lte_mocn[(comp_lte_mocn['Date'] >= post_start) & (comp_lte_mocn['Date'] <= post_end)] if not comp_lte_mocn.empty else comp_lte_mocn
-    
-    pre_gsm_df = comp_gsm_mocn[(comp_gsm_mocn['Date'] >= pre_start) & (comp_gsm_mocn['Date'] <= pre_end)] if not comp_gsm_mocn.empty else comp_gsm_mocn
-    post_gsm_df = comp_gsm_mocn[(comp_gsm_mocn['Date'] >= post_start) & (comp_gsm_mocn['Date'] <= post_end)] if not comp_gsm_mocn.empty else comp_gsm_mocn
-    
-    pre_5g_df = comp_5g_mocn[(comp_5g_mocn['Date'] >= pre_start) & (comp_5g_mocn['Date'] <= pre_end)] if not comp_5g_mocn.empty else comp_5g_mocn
-    post_5g_df = comp_5g_mocn[(comp_5g_mocn['Date'] >= post_start) & (comp_5g_mocn['Date'] <= post_end)] if not comp_5g_mocn.empty else comp_5g_mocn
+    pre_2g = comp_2g[(comp_2g['Date'] >= pre_start) & (comp_2g['Date'] <= pre_end)] if not comp_2g.empty else comp_2g
+    pre_4g = comp_4g[(comp_4g['Date'] >= pre_start) & (comp_4g['Date'] <= pre_end)] if not comp_4g.empty else comp_4g
+    pre_5g = comp_5g[(comp_5g['Date'] >= pre_start) & (comp_5g['Date'] <= pre_end)] if not comp_5g.empty else comp_5g
 
-    c_lte_pay  = ['totalpayloadgbkpi', '4g_total payload gb_kpi']
-    c_lte_rrc  = ['connectedusermaxkpi']
-    c_lte_volte= ['voltetrafficerlkpi']
-    c_gsm_traf = ['tchtraffic', '2g_tch traffic_kpi']
+    post_2g = comp_2g[(comp_2g['Date'] >= post_start) & (comp_2g['Date'] <= post_end)] if not comp_2g.empty else comp_2g
+    post_4g = comp_4g[(comp_4g['Date'] >= post_start) & (comp_4g['Date'] <= post_end)] if not comp_4g.empty else comp_4g
+    post_5g = comp_5g[(comp_5g['Date'] >= post_start) & (comp_5g['Date'] <= post_end)] if not comp_5g.empty else comp_5g
+
+    c_2g_traf = ['2g_tch traffic_kpi', 'tchtraffic']
+    c_4g_pay  = ['totalpayloadgbkpi', '4g_total payload gb_kpi']
+    c_4g_rrc  = ['connectedusermaxkpi']
+    c_4g_volte= ['voltetrafficerlkpi']
     c_5g_pay  = ['dlulpayload']
     c_5g_rrc  = ['rrcusermax']
-    c_gsm_avail = ['2g_nav_kpi(%)', '2g_nav_kpi']
-    c_lte_avail = ['navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi']
+    c_2g_avail = ['2g_nav_kpi(%)', '2g_nav_kpi']
+    c_4g_avail = ['navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi']
     c_5g_avail = ['cellavailability']
 
-    pre_payload_4g = get_op_sum(pre_lte_df, c_lte_pay, 'xl') + get_op_sum(pre_lte_df, c_lte_pay, 'sf')
-    pre_rrc_4g = get_op_sum(pre_lte_df, c_lte_rrc, 'xl') + get_op_sum(pre_lte_df, c_lte_rrc, 'sf')
-    pre_voice_volte = get_op_sum(pre_lte_df, c_lte_volte, 'xl') + get_op_sum(pre_lte_df, c_lte_volte, 'sf')
-    pre_voice_2g = get_op_sum(pre_gsm_df, c_gsm_traf, 'xl') + get_op_sum(pre_gsm_df, c_gsm_traf, 'sf')
-    pre_avail_4g = get_op_mean(pre_lte_df, c_lte_avail, ['xl', 'sf'])
-    pre_avail_2g = get_op_mean(pre_gsm_df, c_gsm_avail, ['xl', 'sf'])
-    
-    c_5g_op = get_col(pre_5g_df, ['operator', 'opr'])
-    if c_5g_op in pre_5g_df.columns:
-        pre_payload_5g = get_op_sum(pre_5g_df, c_5g_pay, 'xl') + get_op_sum(pre_5g_df, c_5g_pay, 'sf')
-        pre_rrc_5g = get_op_sum(pre_5g_df, c_5g_rrc, 'xl') + get_op_sum(pre_5g_df, c_5g_rrc, 'sf')
-        pre_avail_5g = get_op_mean(pre_5g_df, c_5g_avail, ['xl', 'sf'])
+    # 4G LOGIC (Pintar mendeteksi ada operator atau tidak)
+    c_4g_op = get_col(pre_4g, ['operator', 'opr'])
+    if c_4g_op in pre_4g.columns:
+        pre_payload_4g = get_op_sum(pre_4g, c_4g_pay, 'xl') + get_op_sum(pre_4g, c_4g_pay, 'sf')
+        pre_rrc_4g = get_op_sum(pre_4g, c_4g_rrc, 'xl') + get_op_sum(pre_4g, c_4g_rrc, 'sf')
+        pre_voice_volte = get_op_sum(pre_4g, c_4g_volte, 'xl') + get_op_sum(pre_4g, c_4g_volte, 'sf')
+        pre_avail_4g = get_op_mean(pre_4g, c_4g_avail, ['xl', 'sf'])
         
-        post_payload_5g = get_op_sum(post_5g_df, c_5g_pay, 'xlsmart')
-        post_rrc_5g = get_op_sum(post_5g_df, c_5g_rrc, 'xlsmart')
-        post_avail_5g = get_op_mean(post_5g_df, c_5g_avail, ['xlsmart'])
+        post_payload_4g = get_op_sum(post_4g, c_4g_pay, 'xlsmart')
+        post_rrc_4g = get_op_sum(post_4g, c_4g_rrc, 'xlsmart')
+        post_voice_volte = get_op_sum(post_4g, c_4g_volte, 'xlsmart')
+        post_avail_4g = get_op_mean(post_4g, c_4g_avail, ['xlsmart'])
     else:
-        pre_payload_5g = get_sum(pre_5g_df, c_5g_pay)
-        pre_rrc_5g = get_sum(pre_5g_df, c_5g_rrc)
-        pre_avail_5g = get_mean(pre_5g_df, c_5g_avail)
+        pre_payload_4g = get_sum(pre_4g, c_4g_pay)
+        pre_rrc_4g = get_sum(pre_4g, c_4g_rrc)
+        pre_voice_volte = get_sum(pre_4g, c_4g_volte)
+        pre_avail_4g = get_mean(pre_4g, c_4g_avail)
         
-        post_payload_5g = get_sum(post_5g_df, c_5g_pay)
-        post_rrc_5g = get_sum(post_5g_df, c_5g_rrc)
-        post_avail_5g = get_mean(post_5g_df, c_5g_avail)
+        post_payload_4g = get_sum(post_4g, c_4g_pay)
+        post_rrc_4g = get_sum(post_4g, c_4g_rrc)
+        post_voice_volte = get_sum(post_4g, c_4g_volte)
+        post_avail_4g = get_mean(post_4g, c_4g_avail)
 
-    post_payload_4g = get_op_sum(post_lte_df, c_lte_pay, 'xlsmart')
-    post_rrc_4g = get_op_sum(post_lte_df, c_lte_rrc, 'xlsmart')
-    post_voice_volte = get_op_sum(post_lte_df, c_lte_volte, 'xlsmart')
-    post_voice_2g = get_op_sum(post_gsm_df, c_gsm_traf, 'xlsmart')
-    post_avail_4g = get_op_mean(post_lte_df, c_lte_avail, ['xlsmart'])
-    post_avail_2g = get_op_mean(post_gsm_df, c_gsm_avail, ['xlsmart'])
+    # 2G LOGIC
+    c_2g_op = get_col(pre_2g, ['operator', 'opr'])
+    if c_2g_op in pre_2g.columns:
+        pre_voice_2g = get_op_sum(pre_2g, c_2g_traf, 'xl') + get_op_sum(pre_2g, c_2g_traf, 'sf')
+        pre_avail_2g = get_op_mean(pre_2g, c_2g_avail, ['xl', 'sf'])
+        
+        post_voice_2g = get_op_sum(post_2g, c_2g_traf, 'xlsmart')
+        post_avail_2g = get_op_mean(post_2g, c_2g_avail, ['xlsmart'])
+    else:
+        pre_voice_2g = get_sum(pre_2g, c_2g_traf)
+        pre_avail_2g = get_mean(pre_2g, c_2g_avail)
+        post_voice_2g = get_sum(post_2g, c_2g_traf)
+        post_avail_2g = get_mean(post_2g, c_2g_avail)
+
+    # 5G LOGIC
+    c_5g_op = get_col(pre_5g, ['operator', 'opr'])
+    if c_5g_op in pre_5g.columns:
+        pre_payload_5g = get_op_sum(pre_5g, c_5g_pay, 'xl') + get_op_sum(pre_5g, c_5g_pay, 'sf')
+        pre_rrc_5g = get_op_sum(pre_5g, c_5g_rrc, 'xl') + get_op_sum(pre_5g, c_5g_rrc, 'sf')
+        pre_avail_5g = get_op_mean(pre_5g, c_5g_avail, ['xl', 'sf'])
+        
+        post_payload_5g = get_op_sum(post_5g, c_5g_pay, 'xlsmart')
+        post_rrc_5g = get_op_sum(post_5g, c_5g_rrc, 'xlsmart')
+        post_avail_5g = get_op_mean(post_5g, c_5g_avail, ['xlsmart'])
+    else:
+        pre_payload_5g = get_sum(pre_5g, c_5g_pay)
+        pre_rrc_5g = get_sum(pre_5g, c_5g_rrc)
+        pre_avail_5g = get_mean(pre_5g, c_5g_avail)
+        
+        post_payload_5g = get_sum(post_5g, c_5g_pay)
+        post_rrc_5g = get_sum(post_5g, c_5g_rrc)
+        post_avail_5g = get_mean(post_5g, c_5g_avail)
 
     pre_payload_total = pre_payload_4g + pre_payload_5g
     pre_rrc_total = pre_rrc_4g + pre_rrc_5g
@@ -577,7 +567,6 @@ if not chart_lte.empty or not chart_gsm.empty:
     if not chart_lte.empty and c_lte_op in chart_lte.columns:
         valid_lte_agg = {k: 'sum' for k in [c_lte_pay, c_lte_volte, c_lte_rrc, c_lte_dlnum, c_lte_dlden] if k in chart_lte.columns}
         if valid_lte_agg:
-            # Matikan observed=True untuk pandas versi lama
             agg_lte = chart_lte.groupby(['Date', c_lte_op]).agg(valid_lte_agg).reset_index()
             agg_lte.rename(columns={c_lte_op: 'Operator'}, inplace=True)
         else:
