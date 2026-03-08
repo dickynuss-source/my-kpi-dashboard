@@ -26,26 +26,11 @@ HD_CONFIG = {
 GDRIVE_FILE_IDS = {
     "Master_2GDaily.parquet": "1-NT-NtuVoyxvdZw-A8ypl4jhJRgOs2xy",
     "Master_4GDaily.parquet": "1PxhJRu9ruYS8SfJ7gMbhcs-4xVOouEw3",
-    "Master_No_PLMN.parquet": "1Simg9uithTM5sRF5IqeSchhGagd1Yczf",
+    "Master_No_PLMN.parquet": "1Simg9uithTM5sRF5IqeSchhGagd1Yczf", # <--- UPDATE LINK 5G BARU DARI USER
     "Master_4GBH.parquet":    "1dDY3d3pJ1WxfJQVzjeFx0Z-T35bLpB61",
     "Master_LTE.parquet":     "1hY4B6ZfMJbAG8lIgt5LAp6n4jD11hEMm",
     "Master_GSM.parquet":     "1haxfl2PF3Q-haQVIYad5k48w8TPow8Rx"
 }
-
-# DIET KETAT PARQUET: Mencegah OOM Crash dengan hanya membaca kolom yang dibutuhkan
-NEEDED_COLUMNS = [
-    'date', 'begintime', 'operator', 'opr', 'cluster', 'project_cluster', 
-    'towerid', 'siteid', 'tower_sector', 'cellname', 'moentity', 
-    '2g_tch traffic_kpi', 'tchtraffic', '2g_nav_kpi(%)', '2g_nav_kpi',
-    'totalpayloadgbkpi', '4g_total payload gb_kpi', 'connectedusermaxkpi', 
-    'voltetrafficerlkpi', 'navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi',
-    'cellavailability', '4g_nav_kpi(%)', '4g_nav_kpi', 'dlulpayload', 'rrcusermax',
-    '4g_cell_downlink user throughput_num', 'celldluserthpnum',
-    '4g_cell_downlink user throughput_den', 'celldluserthpden',
-    '4g_cell_uplink user throughput_num', '4g_cell_uplink user throughput_den',
-    'dl prb', 'dlprbutil', '4g_average ta num_mpi', '4g_average ta den_mpi',
-    '4g_cell_average cqi_num', '4g_cell_average cqi_den'
-]
 
 # ================= HELPER FUNCTIONS =================
 def format_x_axis(fig, num_days=10):
@@ -56,52 +41,72 @@ def format_x_axis(fig, num_days=10):
     else: interval = max(1, num_days // 14)
     
     tick_ms = 86400000 * interval 
-    fig.update_xaxes(tickangle=-45, dtick=tick_ms, tickformat="%Y-%m-%d", tickfont=dict(color='#2c3e50', size=24), showgrid=True, gridwidth=1, gridcolor='#e5e8e8', linecolor='#bdc3c7', linewidth=1) 
+    
+    fig.update_xaxes(
+        tickangle=-45, dtick=tick_ms, tickformat="%Y-%m-%d",
+        tickfont=dict(color='#2c3e50', size=24), 
+        showgrid=True, gridwidth=1, gridcolor='#e5e8e8', linecolor='#bdc3c7', linewidth=1
+    ) 
     fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#e5e8e8', linecolor='#bdc3c7', linewidth=1)
     fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font=dict(color='#2c3e50'), margin=dict(l=10, r=10, t=40, b=80))
     return fig
 
+# Fungsi Get Col Super Pintar (Kebal Huruf Besar/Kecil)
 def get_col(df, possible_names):
     if df.empty: return possible_names[0]
     df_cols_lower = {c.lower().strip(): c for c in df.columns}
     for n in possible_names:
         n_lower = n.lower().strip()
-        if n_lower in df_cols_lower: return df_cols_lower[n_lower]
+        if n_lower in df_cols_lower:
+            return df_cols_lower[n_lower]
     return possible_names[0]
 
 # ================= SUPER LIGHTWEIGHT DATA LOADING =================
 @st.cache_data(ttl=timedelta(hours=12)) 
 def load_data():
     dfs = {}
+    
+    # KATA KUNCI PINTAR: Menyelamatkan data penting agar RAM stabil di ~30MB
+    keep_keywords = [
+        'date', 'time', 'operator', 'cluster', 'tower', 'site', 'cell', 
+        'payload', 'rrc', 'traffic', 'nav', 'avail', 'thp', 'throughput', 
+        'prb', 'ta', 'cqi'
+    ]
+    
     for filename, file_id in GDRIVE_FILE_IDS.items():
         if not os.path.exists(filename):
             url = f'https://drive.google.com/uc?id={file_id}'
             try:
                 gdown.download(url, filename, quiet=True)
-            except Exception:
-                pass
+            except Exception as e:
+                st.error(f"Failed to download {filename}: {e}")
             
         try:
+            # OPTIMASI RAM (Pruning)
             parquet_file = pq.ParquetFile(filename)
             existing_cols = parquet_file.schema.names
-            col_map = {c.lower().strip(): c for c in existing_cols}
-            cols_to_load = [col_map[c] for c in NEEDED_COLUMNS if c in col_map]
             
-            df = pd.read_parquet(filename, columns=cols_to_load) if cols_to_load else pd.read_parquet(filename)
+            cols_to_load = [c for c in existing_cols if any(k in c.lower() for k in keep_keywords)]
+            
+            if cols_to_load:
+                df = pd.read_parquet(filename, columns=cols_to_load)
+            else:
+                df = pd.read_parquet(filename)
                 
             if not df.empty:
-                # PERBAIKAN BUG TANGGAL GANDA YANG MENYEBABKAN MOCN = 0
-                date_cols = [c for c in df.columns if c.lower().strip() in ['date', 'begintime']]
-                if date_cols:
-                    main_d = date_cols[0]
-                    df['Date_Temp'] = pd.to_datetime(df[main_d], errors='coerce').dt.date
-                    df = df.drop(columns=date_cols) 
+                # Deteksi otomatis tanggal (Date / begintime)
+                date_col = next((c for c in df.columns if c.lower().strip() in ['date', 'begintime']), None)
+                if date_col:
+                    df['Date_Temp'] = pd.to_datetime(df[date_col], errors='coerce').dt.date
+                    if date_col != 'Date': 
+                        df = df.drop(columns=[date_col])
                     df['Date'] = df['Date_Temp']
                     df = df.drop(columns=['Date_Temp'])
             dfs[filename] = df
-        except Exception:
+        except Exception as e:
             dfs[filename] = pd.DataFrame()
 
+    # KHUSUS 5G: Memastikan Numerik pada dlulpayload & rrcusermax
     df_5g = dfs.get("Master_No_PLMN.parquet", pd.DataFrame())
     if not df_5g.empty:
         c_pay = get_col(df_5g, ['dlulpayload'])
@@ -249,13 +254,6 @@ def get_op_sum(df, col_names, op_name):
     df_op = df[df[op_col].astype(str).str.lower().str.strip() == op_name]
     return get_sum(df_op, col_names)
 
-def get_op_mean(df, col_names, ops):
-    if df.empty: return 0
-    op_col = get_col(df, ['operator', 'opr'])
-    if op_col not in df.columns: return 0
-    df_op = df[df[op_col].astype(str).str.lower().str.strip().isin(ops)]
-    return get_mean(df_op, col_names)
-
 def calc_delta(pre, post):
     if pre == 0 and post == 0: return 0
     if pre == 0: return 100.0
@@ -270,18 +268,19 @@ st.header("📊 Pre vs Post Comparison - MOCN RAT Level")
 col_f1, col_f2 = st.columns(2)
 with col_f1:
     all_clusters_comp = set()
-    for df in [raw_lte, raw_gsm, raw_5g]: 
+    # MENGEMBALIKAN LOGIKA RAT LEVEL MURNI: Gunakan Master_4GDaily (raw_4g) dan Master_2GDaily (raw_2g)
+    for df in [raw_2g, raw_4g, raw_5g]: 
         c_clust = get_col(df, ['cluster'])
         if not df.empty and c_clust in df.columns: all_clusters_comp.update(df[c_clust].dropna().unique())
     selected_clusters_comp = st.multiselect("Select Cluster (MOCN Comparison)", sorted([c for c in all_clusters_comp if str(c) != 'nan']), key='cl_mocn')
 
-comp_lte_mocn_c = apply_filter(raw_lte, get_col(raw_lte, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_lte
-comp_gsm_mocn_c = apply_filter(raw_gsm, get_col(raw_gsm, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_gsm
-comp_5g_mocn_c = apply_filter(raw_5g, get_col(raw_5g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_5g
+comp_2g_c = apply_filter(raw_2g, get_col(raw_2g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_2g
+comp_4g_c = apply_filter(raw_4g, get_col(raw_4g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_4g
+comp_5g_c = apply_filter(raw_5g, get_col(raw_5g, ['cluster']), selected_clusters_comp) if selected_clusters_comp else raw_5g
 
 with col_f2:
     all_towers_comp = set()
-    for df in [comp_lte_mocn_c, comp_gsm_mocn_c, comp_5g_mocn_c]:
+    for df in [comp_2g_c, comp_4g_c, comp_5g_c]:
         c_tow = get_col(df, ['towerid'])
         if not df.empty and c_tow in df.columns: all_towers_comp.update(df[c_tow].dropna().unique())
     
@@ -290,9 +289,9 @@ with col_f2:
     p_towers_comp = [s.strip() for s in re.split(r'[,\n\t]+', pasted_towers_comp) if s.strip()] if pasted_towers_comp else []
     selected_towers_comp = list(set(selected_towers_comp_ms + p_towers_comp))
 
-comp_lte_mocn = apply_filter(comp_lte_mocn_c, get_col(comp_lte_mocn_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_lte_mocn_c
-comp_gsm_mocn = apply_filter(comp_gsm_mocn_c, get_col(comp_gsm_mocn_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_gsm_mocn_c
-comp_5g_mocn = apply_filter(comp_5g_mocn_c, get_col(comp_5g_mocn_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_5g_mocn_c
+comp_2g = apply_filter(comp_2g_c, get_col(comp_2g_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_2g_c
+comp_4g = apply_filter(comp_4g_c, get_col(comp_4g_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_4g_c
+comp_5g = apply_filter(comp_5g_c, get_col(comp_5g_c, ['towerid']), selected_towers_comp) if selected_towers_comp else comp_5g_c
 
 col_pre, col_post = st.columns(2)
 default_pre_end = min_date + timedelta(days=4) if max_date > min_date + timedelta(days=4) else max_date
@@ -307,65 +306,50 @@ if len(pre_dates) == 2 and len(post_dates) == 2:
     pre_days = (pre_end - pre_start).days + 1
     post_days = (post_end - post_start).days + 1
 
-    pre_lte_df = comp_lte_mocn[(comp_lte_mocn['Date'] >= pre_start) & (comp_lte_mocn['Date'] <= pre_end)] if not comp_lte_mocn.empty else comp_lte_mocn
-    post_lte_df = comp_lte_mocn[(comp_lte_mocn['Date'] >= post_start) & (comp_lte_mocn['Date'] <= post_end)] if not comp_lte_mocn.empty else comp_lte_mocn
-    
-    pre_gsm_df = comp_gsm_mocn[(comp_gsm_mocn['Date'] >= pre_start) & (comp_gsm_mocn['Date'] <= pre_end)] if not comp_gsm_mocn.empty else comp_gsm_mocn
-    post_gsm_df = comp_gsm_mocn[(comp_gsm_mocn['Date'] >= post_start) & (comp_gsm_mocn['Date'] <= post_end)] if not comp_gsm_mocn.empty else comp_gsm_mocn
-    
-    pre_5g_df = comp_5g_mocn[(comp_5g_mocn['Date'] >= pre_start) & (comp_5g_mocn['Date'] <= pre_end)] if not comp_5g_mocn.empty else comp_5g_mocn
-    post_5g_df = comp_5g_mocn[(comp_5g_mocn['Date'] >= post_start) & (comp_5g_mocn['Date'] <= post_end)] if not comp_5g_mocn.empty else comp_5g_mocn
+    pre_2g = comp_2g[(comp_2g['Date'] >= pre_start) & (comp_2g['Date'] <= pre_end)] if not comp_2g.empty else comp_2g
+    pre_4g = comp_4g[(comp_4g['Date'] >= pre_start) & (comp_4g['Date'] <= pre_end)] if not comp_4g.empty else comp_4g
+    pre_5g = comp_5g[(comp_5g['Date'] >= pre_start) & (comp_5g['Date'] <= pre_end)] if not comp_5g.empty else comp_5g
 
-    c_lte_pay  = ['totalpayloadgbkpi', '4g_total payload gb_kpi']
-    c_lte_rrc  = ['connectedusermaxkpi']
-    c_lte_volte= ['voltetrafficerlkpi']
-    c_gsm_traf = ['tchtraffic', '2g_tch traffic_kpi']
+    post_2g = comp_2g[(comp_2g['Date'] >= post_start) & (comp_2g['Date'] <= post_end)] if not comp_2g.empty else comp_2g
+    post_4g = comp_4g[(comp_4g['Date'] >= post_start) & (comp_4g['Date'] <= post_end)] if not comp_4g.empty else comp_4g
+    post_5g = comp_5g[(comp_5g['Date'] >= post_start) & (comp_5g['Date'] <= post_end)] if not comp_5g.empty else comp_5g
+
+    c_2g_traf = ['2g_tch traffic_kpi', 'tchtraffic']
+    c_4g_pay  = ['totalpayloadgbkpi', '4g_total payload gb_kpi']
+    c_4g_rrc  = ['connectedusermaxkpi']
+    c_4g_volte= ['voltetrafficerlkpi']
     c_5g_pay  = ['dlulpayload']
     c_5g_rrc  = ['rrcusermax']
-    c_gsm_avail = ['2g_nav_kpi(%)', '2g_nav_kpi']
-    c_lte_avail = ['navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi']
+    c_2g_avail = ['2g_nav_kpi(%)', '2g_nav_kpi']
+    c_4g_avail = ['navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi']
     c_5g_avail = ['cellavailability']
 
-    pre_payload_4g = get_op_sum(pre_lte_df, c_lte_pay, 'xl') + get_op_sum(pre_lte_df, c_lte_pay, 'sf')
-    pre_rrc_4g = get_op_sum(pre_lte_df, c_lte_rrc, 'xl') + get_op_sum(pre_lte_df, c_lte_rrc, 'sf')
-    pre_voice_volte = get_op_sum(pre_lte_df, c_lte_volte, 'xl') + get_op_sum(pre_lte_df, c_lte_volte, 'sf')
-    pre_voice_2g = get_op_sum(pre_gsm_df, c_gsm_traf, 'xl') + get_op_sum(pre_gsm_df, c_gsm_traf, 'sf')
-    pre_avail_4g = get_op_mean(pre_lte_df, c_lte_avail, ['xl', 'sf'])
-    pre_avail_2g = get_op_mean(pre_gsm_df, c_gsm_avail, ['xl', 'sf'])
-    
-    # 5G LOGIC (Pintar mendeteksi ada operator atau tidak)
-    c_5g_op = get_col(pre_5g_df, ['operator', 'opr'])
-    if c_5g_op in pre_5g_df.columns:
-        pre_payload_5g = get_op_sum(pre_5g_df, c_5g_pay, 'xl') + get_op_sum(pre_5g_df, c_5g_pay, 'sf')
-        pre_rrc_5g = get_op_sum(pre_5g_df, c_5g_rrc, 'xl') + get_op_sum(pre_5g_df, c_5g_rrc, 'sf')
-        pre_avail_5g = get_op_mean(pre_5g_df, c_5g_avail, ['xl', 'sf'])
-        
-        post_payload_5g = get_op_sum(post_5g_df, c_5g_pay, 'xlsmart')
-        post_rrc_5g = get_op_sum(post_5g_df, c_5g_rrc, 'xlsmart')
-        post_avail_5g = get_op_mean(post_5g_df, c_5g_avail, ['xlsmart'])
-    else:
-        pre_payload_5g = get_sum(pre_5g_df, c_5g_pay)
-        pre_rrc_5g = get_sum(pre_5g_df, c_5g_rrc)
-        pre_avail_5g = get_mean(pre_5g_df, c_5g_avail)
-        
-        post_payload_5g = get_sum(post_5g_df, c_5g_pay)
-        post_rrc_5g = get_sum(post_5g_df, c_5g_rrc)
-        post_avail_5g = get_mean(post_5g_df, c_5g_avail)
-
-    post_payload_4g = get_op_sum(post_lte_df, c_lte_pay, 'xlsmart')
-    post_rrc_4g = get_op_sum(post_lte_df, c_lte_rrc, 'xlsmart')
-    post_voice_volte = get_op_sum(post_lte_df, c_lte_volte, 'xlsmart')
-    post_voice_2g = get_op_sum(post_gsm_df, c_gsm_traf, 'xlsmart')
-    post_avail_4g = get_op_mean(post_lte_df, c_lte_avail, ['xlsmart'])
-    post_avail_2g = get_op_mean(post_gsm_df, c_gsm_avail, ['xlsmart'])
-
+    # KEMBALI MENGGUNAKAN GET_SUM BIASA KARENA INI DATA TOTAL SITE (BUKAN OPERATOR LEVEL)
+    pre_payload_4g = get_sum(pre_4g, c_4g_pay)
+    pre_payload_5g = get_sum(pre_5g, c_5g_pay)
     pre_payload_total = pre_payload_4g + pre_payload_5g
+    pre_rrc_4g = get_sum(pre_4g, c_4g_rrc)
+    pre_rrc_5g = get_sum(pre_5g, c_5g_rrc)
     pre_rrc_total = pre_rrc_4g + pre_rrc_5g
+    pre_voice_volte = get_sum(pre_4g, c_4g_volte)
+    pre_voice_2g = get_sum(pre_2g, c_2g_traf)
     pre_voice_total = pre_voice_volte + pre_voice_2g
+    pre_avail_4g = get_mean(pre_4g, c_4g_avail)
+    pre_avail_5g = get_mean(pre_5g, c_5g_avail)
+    pre_avail_2g = get_mean(pre_2g, c_2g_avail)
 
+    post_payload_4g = get_sum(post_4g, c_4g_pay)
+    post_payload_5g = get_sum(post_5g, c_5g_pay)
     post_payload_total = post_payload_4g + post_payload_5g
+    post_rrc_4g = get_sum(post_4g, c_4g_rrc)
+    post_rrc_5g = get_sum(post_5g, c_5g_rrc)
     post_rrc_total = post_rrc_4g + post_rrc_5g
+    post_voice_volte = get_sum(post_4g, c_4g_volte)
+    post_voice_2g = get_sum(post_2g, c_2g_traf)
     post_voice_total = post_voice_volte + post_voice_2g
+    post_avail_4g = get_mean(post_4g, c_4g_avail)
+    post_avail_5g = get_mean(post_5g, c_5g_avail)
+    post_avail_2g = get_mean(post_2g, c_2g_avail)
 
     comp_data = {
         "KPI / Metric": [
@@ -374,13 +358,13 @@ if len(pre_dates) == 2 and len(post_dates) == 2:
             "Total Voice Traffic (2G+4G) [Erl]", "├─ 4G VoLTE Traffic [Erl]", "└─ 2G Traffic [Erl]",
             "4G Network Availability [%]", "5G Network Availability [%]", "2G Network Availability [%]"
         ],
-        f"Pre MOCN (XL+SF)": [
+        f"Pre ({pre_days} Days)": [
             pre_payload_total, pre_payload_4g, pre_payload_5g, 
             pre_rrc_total, pre_rrc_4g, pre_rrc_5g,
             pre_voice_total, pre_voice_volte, pre_voice_2g,
             pre_avail_4g, pre_avail_5g, pre_avail_2g
         ],
-        f"Post MOCN (XLSMART)": [
+        f"Post ({post_days} Days)": [
             post_payload_total, post_payload_4g, post_payload_5g, 
             post_rrc_total, post_rrc_4g, post_rrc_5g,
             post_voice_total, post_voice_volte, post_voice_2g,
@@ -394,7 +378,7 @@ if len(pre_dates) == 2 and len(post_dates) == 2:
         ]
     }
     df_comp = pd.DataFrame(comp_data)
-    st.dataframe(df_comp.style.format({f"Pre MOCN (XL+SF)": "{:,.2f}", f"Post MOCN (XLSMART)": "{:,.2f}", "Delta (%)": "{:,.2f} %"}).map(color_delta, subset=['Delta (%)']), width='stretch')
+    st.dataframe(df_comp.style.format({f"Pre ({pre_days} Days)": "{:,.2f}", f"Post ({post_days} Days)": "{:,.2f}", "Delta (%)": "{:,.2f} %"}).map(color_delta, subset=['Delta (%)']), width='stretch')
 else:
     st.warning("Please select a complete date range for both Pre and Post calendars above.")
 
@@ -857,4 +841,3 @@ if not chart_4g_bh.empty and len(date_range) == 2:
             fig_cell_cqi = px.line(agg_bh_cell, x='Date', y='BH Average CQI', color='CellName', hover_data=['Tower_Sector'], title='6. Cell Level - Average CQI', markers=True)
             fig_cell_cqi.update_layout(height=700)
             st.plotly_chart(format_x_axis(fig_cell_cqi, trend_days), width='stretch', config=HD_CONFIG)
-
