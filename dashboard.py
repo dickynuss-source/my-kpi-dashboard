@@ -9,6 +9,7 @@ import warnings
 import re 
 import os
 import gdown 
+import pyarrow.parquet as pq
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -30,6 +31,19 @@ GDRIVE_FILE_IDS = {
     "Master_LTE.parquet":     "1hY4B6ZfMJbAG8lIgt5LAp6n4jD11hEMm",
     "Master_GSM.parquet":     "1haxfl2PF3Q-haQVIYad5k48w8TPow8Rx"
 }
+
+# Daftar Kolom yang Benar-Benar Dipakai (Menghemat RAM 90%)
+NEEDED_COLUMNS = [
+    'Date', 'Operator', 'Cluster', 'TowerID', 'Tower_Sector', 'CellName',
+    '2g_tch traffic_kpi', 'tchtraffic', '2g_nav_kpi(%)', '2g_nav_kpi',
+    'totalpayloadgbkpi', 'connectedusermaxkpi', 'voltetrafficerlkpi', 'navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi',
+    'dlulpayload', 'rrcusermax', 'cellavailability',
+    '4g_cell_downlink user throughput_num', '4g_cell_downlink user throughput_den',
+    '4g_cell_uplink user throughput_num', '4g_cell_uplink user throughput_den',
+    '4g_total payload gb_kpi', 'dl prb', '4g_average ta num_mpi', '4g_average ta den_mpi',
+    '4g_cell_average cqi_num', '4g_cell_average cqi_den',
+    'celldluserthpnum', 'celldluserthpden'
+]
 
 # ================= HELPER FUNCTIONS =================
 def format_x_axis(fig, num_days=10):
@@ -56,7 +70,7 @@ def get_col(df, possible_names):
         if n in df.columns: return n
     return possible_names[0]
 
-# ================= DATA LOADING FROM GOOGLE DRIVE =================
+# ================= SUPER LIGHTWEIGHT DATA LOADING =================
 @st.cache_data(ttl=timedelta(hours=12)) 
 def load_data():
     dfs = {}
@@ -69,7 +83,12 @@ def load_data():
                 st.error(f"Failed to download {filename}: {e}")
             
         try:
-            df = pd.read_parquet(filename)
+            # OPTIMASI RAM: Hanya baca kolom yang terdaftar di schema file
+            parquet_file = pq.ParquetFile(filename)
+            existing_cols = parquet_file.schema.names
+            cols_to_load = [c for c in NEEDED_COLUMNS if c in existing_cols]
+            
+            df = pd.read_parquet(filename, columns=cols_to_load)
             if not df.empty and 'Date' in df.columns:
                 df['Date'] = pd.to_datetime(df['Date']).dt.date
             dfs[filename] = df
@@ -91,7 +110,7 @@ def load_data():
         dfs.get("Master_GSM.parquet", pd.DataFrame())
     )
 
-with st.spinner("Downloading & Preparing Data from Cloud..."):
+with st.spinner("Downloading & Extracting Data Safely (Optimized RAM)..."):
     raw_2g, raw_4g, raw_5g, raw_4g_bh, raw_lte, raw_gsm = load_data()
 
 # ================= GLOBAL FILTER (MOCN ONLY) =================
@@ -326,6 +345,7 @@ if len(pre_dates) == 2 and len(post_dates) == 2:
         ]
     }
     df_comp = pd.DataFrame(comp_data)
+    # OPTIMASI: Ganti use_container_width dengan width='stretch'
     st.dataframe(df_comp.style.format({f"Pre ({pre_days} Days)": "{:,.2f}", f"Post ({post_days} Days)": "{:,.2f}", "Delta (%)": "{:,.2f} %"}).map(color_delta, subset=['Delta (%)']), width='stretch')
 else:
     st.warning("Please select a complete date range for both Pre and Post calendars above.")
