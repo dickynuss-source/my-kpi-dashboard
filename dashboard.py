@@ -32,19 +32,6 @@ GDRIVE_FILE_IDS = {
     "Master_GSM.parquet":     "1haxfl2PF3Q-haQVIYad5k48w8TPow8Rx"
 }
 
-# Daftar Kolom Prioritas (Diubah semua ke lowercase untuk Smart Matching)
-NEEDED_COLUMNS = [
-    'date', 'operator', 'cluster', 'towerid', 'tower_sector', 'cellname',
-    '2g_tch traffic_kpi', 'tchtraffic', '2g_nav_kpi(%)', '2g_nav_kpi',
-    'totalpayloadgbkpi', 'connectedusermaxkpi', 'voltetrafficerlkpi', 'navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi',
-    'dlulpayload', 'rrcusermax', 'cellavailability',
-    '4g_cell_downlink user throughput_num', '4g_cell_downlink user throughput_den',
-    '4g_cell_uplink user throughput_num', '4g_cell_uplink user throughput_den',
-    '4g_total payload gb_kpi', 'dl prb', '4g_average ta num_mpi', '4g_average ta den_mpi',
-    '4g_cell_average cqi_num', '4g_cell_average cqi_den',
-    'celldluserthpnum', 'celldluserthpden'
-]
-
 # ================= HELPER FUNCTIONS =================
 def format_x_axis(fig, num_days=10):
     if num_days <= 14: interval = 1
@@ -78,6 +65,14 @@ def get_col(df, possible_names):
 @st.cache_data(ttl=timedelta(hours=12)) 
 def load_data():
     dfs = {}
+    
+    # KATA KUNCI PINTAR: Semua kolom yang mengandung kata di bawah ini akan di-load
+    keep_keywords = [
+        'date', 'time', 'operator', 'cluster', 'tower', 'site', 'cell', 
+        'payload', 'rrc', 'traffic', 'nav', 'avail', 'thp', 'throughput', 
+        'prb', 'ta', 'cqi'
+    ]
+    
     for filename, file_id in GDRIVE_FILE_IDS.items():
         if not os.path.exists(filename):
             url = f'https://drive.google.com/uc?id={file_id}'
@@ -87,15 +82,11 @@ def load_data():
                 st.error(f"Failed to download {filename}: {e}")
             
         try:
-            # OPTIMASI RAM + SMART COLUMN MATCHING
+            # OPTIMASI RAM: Tarik kolom berdasarkan kata kunci (Menyelamatkan begintime & payload)
             parquet_file = pq.ParquetFile(filename)
             existing_cols = parquet_file.schema.names
             
-            col_map = {c.lower().strip(): c for c in existing_cols}
-            cols_to_load = []
-            for needed in NEEDED_COLUMNS:
-                if needed in col_map:
-                    cols_to_load.append(col_map[needed])
+            cols_to_load = [c for c in existing_cols if any(k in c.lower() for k in keep_keywords)]
             
             if cols_to_load:
                 df = pd.read_parquet(filename, columns=cols_to_load)
@@ -103,7 +94,8 @@ def load_data():
                 df = pd.read_parquet(filename)
                 
             if not df.empty:
-                date_col = next((c for c in df.columns if c.lower().strip() == 'date'), None)
+                # Deteksi otomatis apakah nama kolom tanggalnya 'Date' atau 'begintime'
+                date_col = next((c for c in df.columns if c.lower().strip() in ['date', 'begintime']), None)
                 if date_col:
                     df['Date'] = pd.to_datetime(df[date_col]).dt.date
                     if date_col != 'Date': 
@@ -266,7 +258,6 @@ st.header("📊 Pre vs Post Comparison - MOCN RAT Level")
 col_f1, col_f2 = st.columns(2)
 with col_f1:
     all_clusters_comp = set()
-    # PENGAMANAN: Gunakan RAW data agar Pre MOCN tidak jadi 0 saat sidebar di-klik Post MOCN
     for df in [raw_2g, raw_4g, raw_5g]: 
         c_clust = get_col(df, ['cluster'])
         if not df.empty and c_clust in df.columns: all_clusters_comp.update(df[c_clust].dropna().unique())
@@ -313,7 +304,7 @@ if len(pre_dates) == 2 and len(post_dates) == 2:
     post_5g = comp_5g[(comp_5g['Date'] >= post_start) & (comp_5g['Date'] <= post_end)] if not comp_5g.empty else comp_5g
 
     c_2g_traf = ['2g_tch traffic_kpi', 'tchtraffic']
-    c_4g_pay  = ['totalpayloadgbkpi']
+    c_4g_pay  = ['totalpayloadgbkpi', '4g_total payload gb_kpi']
     c_4g_rrc  = ['connectedusermaxkpi']
     c_4g_volte= ['voltetrafficerlkpi']
     c_5g_pay  = ['dlulpayload']
@@ -426,7 +417,7 @@ if len(pre_dates_op) == 2 and len(post_dates_op) == 2:
         df_op = df[df[op_col].astype(str).str.lower().str.strip() == op_name]
         return get_sum(df_op, col_names)
 
-    c_lte_pay  = ['totalpayloadgbkpi']
+    c_lte_pay  = ['totalpayloadgbkpi', '4g_total payload gb_kpi']
     c_lte_rrc  = ['connectedusermaxkpi']
     c_lte_volte= ['voltetrafficerlkpi']
     c_gsm_traf = ['tchtraffic', '2g_tch traffic_kpi']
@@ -521,7 +512,7 @@ def plot_dual_axis(df, val_col, title_text, t_days):
     return fig
 
 if not chart_lte.empty or not chart_gsm.empty:
-    c_lte_pay = get_col(chart_lte, ['totalpayloadgbkpi'])
+    c_lte_pay = get_col(chart_lte, ['totalpayloadgbkpi', '4g_total payload gb_kpi'])
     c_lte_volte = get_col(chart_lte, ['voltetrafficerlkpi'])
     c_lte_rrc = get_col(chart_lte, ['connectedusermaxkpi'])
     c_lte_dlnum = get_col(chart_lte, ['celldluserthpnum'])
@@ -574,20 +565,20 @@ if not chart_lte.empty or not chart_gsm.empty:
         with col_op1:
             if c_lte_pay in agg_op_trend.columns:
                 fig_op_pay = plot_dual_axis(agg_op_trend, c_lte_pay, '1. Payload 4G (GB)', trend_days)
-                st.plotly_chart(fig_op_pay, width='stretch', config=HD_CONFIG)
+                st.plotly_chart(fig_op_pay, use_container_width=True, config=HD_CONFIG)
                 
             if c_lte_rrc in agg_op_trend.columns:
                 fig_op_rrc = plot_dual_axis(agg_op_trend, c_lte_rrc, '3. Max RRC User', trend_days)
-                st.plotly_chart(fig_op_rrc, width='stretch', config=HD_CONFIG)
+                st.plotly_chart(fig_op_rrc, use_container_width=True, config=HD_CONFIG)
                 
         with col_op2:
             if 'VoLTE + 2G Traf (Erl)' in agg_op_trend.columns:
                 fig_op_traf = plot_dual_axis(agg_op_trend, 'VoLTE + 2G Traf (Erl)', '2. Voice (VoLTE + 2G) Traffic (Erl)', trend_days)
-                st.plotly_chart(fig_op_traf, width='stretch', config=HD_CONFIG)
+                st.plotly_chart(fig_op_traf, use_container_width=True, config=HD_CONFIG)
                 
             if 'DL Thp (Mbps)' in agg_op_trend.columns:
                 fig_op_thp = plot_dual_axis(agg_op_trend, 'DL Thp (Mbps)', '4. DL Throughput (Mbps)', trend_days)
-                st.plotly_chart(fig_op_thp, width='stretch', config=HD_CONFIG)
+                st.plotly_chart(fig_op_thp, use_container_width=True, config=HD_CONFIG)
 
 st.markdown("---")
 
@@ -596,7 +587,7 @@ st.header("📅 Daily Performance (Area Stacked) - MOCN RAT")
 
 col_2g_traf = get_col(chart_2g, ['2g_tch traffic_kpi', 'tchtraffic'])
 col_2g_avail = get_col(chart_2g, ['2g_nav_kpi(%)', '2g_nav_kpi'])
-col_4g_pay  = get_col(chart_4g, ['totalpayloadgbkpi'])
+col_4g_pay  = get_col(chart_4g, ['totalpayloadgbkpi', '4g_total payload gb_kpi'])
 col_4g_rrc  = get_col(chart_4g, ['connectedusermaxkpi'])
 col_4g_volte= get_col(chart_4g, ['voltetrafficerlkpi'])
 col_4g_avail= get_col(chart_4g, ['navkpi', 'navexcludeprojectkpi', 'navincludeprojectkpi'])
@@ -644,20 +635,20 @@ if not df_trend.empty and len(date_range) == 2:
     with col_d1:
         if '4G Payload (GB)' in df_trend.columns and '5G Payload (GB)' in df_trend.columns:
             fig_payload = px.area(df_trend, x='Date', y=['4G Payload (GB)', '5G Payload (GB)'], title='Daily Payload Trend', color_discrete_sequence=['#1f77b4', '#00cc96'])
-            st.plotly_chart(format_x_axis(fig_payload, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_payload, trend_days), use_container_width=True, config=HD_CONFIG)
         if '4G VoLTE Traffic (Erl)' in df_trend.columns and '2G Traffic (Erl)' in df_trend.columns:
             fig_traf = px.area(df_trend, x='Date', y=['4G VoLTE Traffic (Erl)', '2G Traffic (Erl)'], title='Daily Voice Traffic Trend', color_discrete_sequence=['#ef553b', '#636efa'])
-            st.plotly_chart(format_x_axis(fig_traf, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_traf, trend_days), use_container_width=True, config=HD_CONFIG)
             
     with col_d2:
         if '4G RRC (User Max)' in df_trend.columns and '5G RRC (User Max)' in df_trend.columns:
             fig_rrc = px.area(df_trend, x='Date', y=['4G RRC (User Max)', '5G RRC (User Max)'], title='Daily RRC User Trend', color_discrete_sequence=['#ff7f0e', '#ab63fa'])
-            st.plotly_chart(format_x_axis(fig_rrc, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_rrc, trend_days), use_container_width=True, config=HD_CONFIG)
             
         avail_cols = [c for c in ['4G Availability (%)', '5G Availability (%)', '2G Availability (%)'] if c in df_trend.columns]
         if avail_cols:
             fig_avail = px.line(df_trend, x='Date', y=avail_cols, title='Daily Network Availability (%)', markers=True)
-            st.plotly_chart(format_x_axis(fig_avail, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_avail, trend_days), use_container_width=True, config=HD_CONFIG)
 
 else:
     st.warning("Daily data is not available.")
@@ -710,27 +701,27 @@ if not chart_4g_bh.empty and len(date_range) == 2:
             fig_bh_dl = px.line(agg_bh, x='Date', y='BH DL User Thp (Mbps)', title='1. BH DL User Throughput (Mbps)', markers=True)
             fig_bh_dl.add_hline(y=3.0, line_dash="dash", line_color="green", annotation_text="Target 3 Mbps")
             fig_bh_dl.add_hline(y=1.5, line_dash="dash", line_color="red", annotation_text="Limit 1.5 Mbps")
-            st.plotly_chart(format_x_axis(fig_bh_dl, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_bh_dl, trend_days), use_container_width=True, config=HD_CONFIG)
 
             fig_bh_pay = px.line(agg_bh, x='Date', y='BH Payload (GB)', title='3. Busy Hour Payload (GB)', markers=True, color_discrete_sequence=['#2ca02c'])
-            st.plotly_chart(format_x_axis(fig_bh_pay, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_bh_pay, trend_days), use_container_width=True, config=HD_CONFIG)
             
             fig_bh_ta = px.line(agg_bh, x='Date', y='BH Average TA', title='5. BH Average TA', markers=True, color_discrete_sequence=['#9467bd'])
-            st.plotly_chart(format_x_axis(fig_bh_ta, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_bh_ta, trend_days), use_container_width=True, config=HD_CONFIG)
 
             if 'BH Availability (%)' in agg_bh.columns:
                 fig_bh_avail = px.line(agg_bh, x='Date', y='BH Availability (%)', title='7. BH Availability (%)', markers=True, color_discrete_sequence=['#17becf'])
-                st.plotly_chart(format_x_axis(fig_bh_avail, trend_days), width='stretch', config=HD_CONFIG)
+                st.plotly_chart(format_x_axis(fig_bh_avail, trend_days), use_container_width=True, config=HD_CONFIG)
 
         with col_bh2:
             fig_bh_ul = px.line(agg_bh, x='Date', y='BH UL User Thp (Mbps)', title='2. BH UL User Throughput (Mbps)', markers=True, color_discrete_sequence=['#ff7f0e'])
-            st.plotly_chart(format_x_axis(fig_bh_ul, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_bh_ul, trend_days), use_container_width=True, config=HD_CONFIG)
 
             fig_bh_prb = px.line(agg_bh, x='Date', y='BH DL PRB Util (%)', title='4. BH DL PRB Utilization (%)', markers=True, color_discrete_sequence=['#d62728'])
-            st.plotly_chart(format_x_axis(fig_bh_prb, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_bh_prb, trend_days), use_container_width=True, config=HD_CONFIG)
 
             fig_bh_cqi = px.line(agg_bh, x='Date', y='BH Average CQI', title='6. BH Average CQI', markers=True, color_discrete_sequence=['#e377c2'])
-            st.plotly_chart(format_x_axis(fig_bh_cqi, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_bh_cqi, trend_days), use_container_width=True, config=HD_CONFIG)
 
     st.markdown("---")
 
@@ -762,33 +753,33 @@ if not chart_4g_bh.empty and len(date_range) == 2:
             fig_ts_dl.add_hline(y=3.0, line_dash="dash", line_color="green")
             fig_ts_dl.add_hline(y=1.5, line_dash="dash", line_color="red")
             fig_ts_dl.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_ts_dl, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_ts_dl, trend_days), use_container_width=True, config=HD_CONFIG)
 
             fig_ts_pay = px.area(agg_bh_ts, x='Date', y='BH Payload (GB)', color='Tower_Sector', title='3. Sector Level - Payload (GB) [Stacked Area]')
             fig_ts_pay.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_ts_pay, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_ts_pay, trend_days), use_container_width=True, config=HD_CONFIG)
             
             fig_ts_ta = px.line(agg_bh_ts, x='Date', y='BH Average TA', color='Tower_Sector', title='5. Sector Level - Average TA', markers=True)
             fig_ts_ta.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_ts_ta, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_ts_ta, trend_days), use_container_width=True, config=HD_CONFIG)
             
             if 'BH Availability (%)' in agg_bh_ts.columns:
                 fig_ts_avail = px.line(agg_bh_ts, x='Date', y='BH Availability (%)', color='Tower_Sector', title='7. Sector Level - Availability (%)', markers=True)
                 fig_ts_avail.update_layout(height=700)
-                st.plotly_chart(format_x_axis(fig_ts_avail, trend_days), width='stretch', config=HD_CONFIG)
+                st.plotly_chart(format_x_axis(fig_ts_avail, trend_days), use_container_width=True, config=HD_CONFIG)
 
         with col_ts2:
             fig_ts_ul = px.line(agg_bh_ts, x='Date', y='BH UL User Thp (Mbps)', color='Tower_Sector', title='2. Sector Level - UL User Thp (Mbps)', markers=True)
             fig_ts_ul.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_ts_ul, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_ts_ul, trend_days), use_container_width=True, config=HD_CONFIG)
 
             fig_ts_prb = px.line(agg_bh_ts, x='Date', y='BH DL PRB Util (%)', color='Tower_Sector', title='4. Sector Level - DL PRB Util (%)', markers=True)
             fig_ts_prb.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_ts_prb, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_ts_prb, trend_days), use_container_width=True, config=HD_CONFIG)
             
             fig_ts_cqi = px.line(agg_bh_ts, x='Date', y='BH Average CQI', color='Tower_Sector', title='6. Sector Level - Average CQI', markers=True)
             fig_ts_cqi.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_ts_cqi, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_ts_cqi, trend_days), use_container_width=True, config=HD_CONFIG)
 
     st.markdown("---")
 
@@ -820,30 +811,30 @@ if not chart_4g_bh.empty and len(date_range) == 2:
             fig_cell_dl.add_hline(y=3.0, line_dash="dash", line_color="green")
             fig_cell_dl.add_hline(y=1.5, line_dash="dash", line_color="red")
             fig_cell_dl.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_cell_dl, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_cell_dl, trend_days), use_container_width=True, config=HD_CONFIG)
 
             fig_cell_pay = px.area(agg_bh_cell, x='Date', y='BH Payload (GB)', color='CellName', hover_data=['Tower_Sector'], title='3. Cell Level - Payload (GB) [Stacked Area]')
             fig_cell_pay.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_cell_pay, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_cell_pay, trend_days), use_container_width=True, config=HD_CONFIG)
             
             fig_cell_ta = px.line(agg_bh_cell, x='Date', y='BH Average TA', color='CellName', hover_data=['Tower_Sector'], title='5. Cell Level - Average TA', markers=True)
             fig_cell_ta.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_cell_ta, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_cell_ta, trend_days), use_container_width=True, config=HD_CONFIG)
             
             if 'BH Availability (%)' in agg_bh_cell.columns:
                 fig_cell_avail = px.line(agg_bh_cell, x='Date', y='BH Availability (%)', color='CellName', hover_data=['Tower_Sector'], title='7. Cell Level - Availability (%)', markers=True)
                 fig_cell_avail.update_layout(height=700)
-                st.plotly_chart(format_x_axis(fig_cell_avail, trend_days), width='stretch', config=HD_CONFIG)
+                st.plotly_chart(format_x_axis(fig_cell_avail, trend_days), use_container_width=True, config=HD_CONFIG)
 
         with col_c2:
             fig_cell_ul = px.line(agg_bh_cell, x='Date', y='BH UL User Thp (Mbps)', color='CellName', hover_data=['Tower_Sector'], title='2. Cell Level - UL User Thp (Mbps)', markers=True)
             fig_cell_ul.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_cell_ul, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_cell_ul, trend_days), use_container_width=True, config=HD_CONFIG)
 
             fig_cell_prb = px.line(agg_bh_cell, x='Date', y='BH DL PRB Util (%)', color='CellName', hover_data=['Tower_Sector'], title='4. Cell Level - DL PRB Util (%)', markers=True)
             fig_cell_prb.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_cell_prb, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_cell_prb, trend_days), use_container_width=True, config=HD_CONFIG)
             
             fig_cell_cqi = px.line(agg_bh_cell, x='Date', y='BH Average CQI', color='CellName', hover_data=['Tower_Sector'], title='6. Cell Level - Average CQI', markers=True)
             fig_cell_cqi.update_layout(height=700)
-            st.plotly_chart(format_x_axis(fig_cell_cqi, trend_days), width='stretch', config=HD_CONFIG)
+            st.plotly_chart(format_x_axis(fig_cell_cqi, trend_days), use_container_width=True, config=HD_CONFIG)
